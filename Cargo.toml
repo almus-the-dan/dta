@@ -1,0 +1,26 @@
+[package]
+name = "dta"
+version = "0.1.0"
+edition = "2024"
+description = ""
+license = "MIT"
+homepage = "https://github.com/almus-the-dan/dta"
+repository = "https://github.com/almus-the-dan/dta"
+readme = "README.md"
+exclude = [
+    "precommit-check.ps1",
+    ".github/",
+    "plans/",
+]
+keywords = ["stata", "data", "statistics", "data"]
+categories = ["parser-implementations", "encoding", "science"]
+
+[dependencies]
+
+[lints.rust]
+rust_2018_idioms = "warn"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
