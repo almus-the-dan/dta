@@ -16,6 +16,7 @@ keywords = ["stata", "data", "statistics", "data"]
 categories = ["parser-implementations", "encoding", "science"]
 
 [dependencies]
+encoding_rs = "0.8.35"
 
 [lints.rust]
 rust_2018_idioms = "warn"

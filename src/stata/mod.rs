@@ -14,3 +14,5 @@ pub mod stata_float;
 pub mod stata_int;
 /// Stata long value (4-byte signed integer or missing).
 pub mod stata_long;
+/// Timestamp from a DTA file header.
+pub mod stata_timestamp;
