@@ -33,6 +33,7 @@
 /// assert_eq!(mv.to_string(), ".a");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum MissingValue {
     /// The system missing value, displayed as `.`.
     System,
@@ -90,6 +91,17 @@ pub enum MissingValue {
     Z,
 }
 
+impl MissingValue {
+    /// Returns the numeric offset of this variant: `System` = 0, `A` = 1, …, `Z` = 26.
+    ///
+    /// This is the enum discriminant and is used internally when encoding
+    /// missing values back into their raw DTA representation.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
 impl Default for MissingValue {
     /// Returns [`MissingValue::System`].
     fn default() -> Self {
@@ -102,9 +114,7 @@ impl core::fmt::Display for MissingValue {
         match self {
             Self::System => f.write_str("."),
             other => {
-                // Safety: all non-System variants are contiguous starting at 1
-                let index = *other as u8; // System=0, A=1, …, Z=26
-                let letter = b'a' + index - 1;
+                let letter = b'a' + other.code() - 1;
                 write!(f, ".{}", letter as char)
             }
         }
@@ -148,7 +158,7 @@ use super::not_missing_value_error::NotMissingValueError;
 /// Returns `Ok(MissingValue::System)` for `offset == 0`, `Ok(MissingValue::A)` for
 /// `offset == 1`, and so on up to `Ok(MissingValue::Z)` for `offset == 26`.
 /// Returns `Err(NotMissingValueError)` for any other input.
-fn from_offset(offset: u32) -> Result<MissingValue, NotMissingValueError> {
+fn from_code(offset: u32) -> Result<MissingValue, NotMissingValueError> {
     match offset {
         0 => Ok(MissingValue::System),
         1 => Ok(MissingValue::A),
@@ -195,7 +205,7 @@ impl TryFrom<u8> for MissingValue {
         if !(MISSING_BYTE_SYSTEM..=MISSING_BYTE_Z).contains(&value) {
             return Err(NotMissingValueError);
         }
-        from_offset(u32::from(value - MISSING_BYTE_SYSTEM))
+        from_code(u32::from(value - MISSING_BYTE_SYSTEM))
     }
 }
 
@@ -209,7 +219,7 @@ impl TryFrom<u16> for MissingValue {
         if !(MISSING_INT_SYSTEM..=MISSING_INT_Z).contains(&value) {
             return Err(NotMissingValueError);
         }
-        from_offset(u32::from(value - MISSING_INT_SYSTEM))
+        from_code(u32::from(value - MISSING_INT_SYSTEM))
     }
 }
 
@@ -223,7 +233,7 @@ impl TryFrom<u32> for MissingValue {
         if !(MISSING_LONG_SYSTEM..=MISSING_LONG_Z).contains(&value) {
             return Err(NotMissingValueError);
         }
-        from_offset(value - MISSING_LONG_SYSTEM)
+        from_code(value - MISSING_LONG_SYSTEM)
     }
 }
 
@@ -250,7 +260,7 @@ impl TryFrom<f32> for MissingValue {
         }
         let offset = offset_raw / MISSING_FLOAT_STRIDE;
         // offset 0 = .a, so add 1 for from_offset
-        from_offset(offset + 1)
+        from_code(offset + 1)
     }
 }
 
@@ -278,7 +288,7 @@ impl TryFrom<f64> for MissingValue {
         let offset = offset_raw / MISSING_DOUBLE_STRIDE;
         // offset 0 = .a, so convert to u32 and add 1
         let offset = u32::try_from(offset).map_err(|_| NotMissingValueError)?;
-        from_offset(offset + 1)
+        from_code(offset + 1)
     }
 }
 
