@@ -18,6 +18,9 @@ categories = ["parser-implementations", "encoding", "science"]
 [dependencies]
 encoding_rs = "0.8.35"
 
+[dev-dependencies]
+float-cmp = "0.10.0"
+
 [lints.rust]
 rust_2018_idioms = "warn"
 missing_debug_implementations = "warn"

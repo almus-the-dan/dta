@@ -83,6 +83,7 @@ impl From<StataFloat> for f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use float_cmp::assert_approx_eq;
 
     // -----------------------------------------------------------------------
     // Present values
@@ -381,17 +382,17 @@ mod tests {
 
     #[test]
     fn roundtrip_present_zero() {
-        assert_eq!(f32::from(StataFloat::Present(0.0)), 0.0);
+        assert_approx_eq!(f32, f32::from(StataFloat::Present(0.0)), 0.0);
     }
 
     #[test]
     fn roundtrip_present_positive() {
-        assert_eq!(f32::from(StataFloat::Present(3.14)), 3.14);
+        assert_approx_eq!(f32, f32::from(StataFloat::Present(1.5)), 1.5);
     }
 
     #[test]
     fn roundtrip_present_negative() {
-        assert_eq!(f32::from(StataFloat::Present(-1.5)), -1.5);
+        assert_approx_eq!(f32, f32::from(StataFloat::Present(-1.5)), -1.5);
     }
 
     // -----------------------------------------------------------------------

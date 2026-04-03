@@ -84,6 +84,7 @@ impl From<StataDouble> for f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use float_cmp::assert_approx_eq;
 
     // -----------------------------------------------------------------------
     // Present values
@@ -384,17 +385,17 @@ mod tests {
 
     #[test]
     fn roundtrip_present_zero() {
-        assert_eq!(f64::from(StataDouble::Present(0.0)), 0.0);
+        assert_approx_eq!(f64, f64::from(StataDouble::Present(0.0)), 0.0);
     }
 
     #[test]
     fn roundtrip_present_positive() {
-        assert_eq!(f64::from(StataDouble::Present(3.14)), 3.14);
+        assert_approx_eq!(f64, f64::from(StataDouble::Present(1.5)), 1.5);
     }
 
     #[test]
     fn roundtrip_present_negative() {
-        assert_eq!(f64::from(StataDouble::Present(-1.5)), -1.5);
+        assert_approx_eq!(f64, f64::from(StataDouble::Present(-1.5)), -1.5);
     }
 
     // -----------------------------------------------------------------------
