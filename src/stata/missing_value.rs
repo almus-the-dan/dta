@@ -147,7 +147,7 @@ const MISSING_DOUBLE_SYSTEM: u64 = 0x7FE0_0000_0000_0000;
 const MISSING_DOUBLE_A: u64 = 0x7FE0_0100_0000_0000;
 const MISSING_DOUBLE_STRIDE: u64 = 0x0100_0000_0000;
 
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 // ---------------------------------------------------------------------------
 // Helper: convert an offset (0 = System, 1 = A, …, 26 = Z) to a variant
@@ -157,8 +157,8 @@ use super::not_missing_value_error::NotMissingValueError;
 ///
 /// Returns `Ok(MissingValue::System)` for `offset == 0`, `Ok(MissingValue::A)` for
 /// `offset == 1`, and so on up to `Ok(MissingValue::Z)` for `offset == 26`.
-/// Returns `Err(NotMissingValueError)` for any other input.
-fn from_code(offset: u32) -> Result<MissingValue, NotMissingValueError> {
+/// Returns `Err(StataError::NotMissingValue)` for any other offset.
+fn from_code(offset: u32) -> Result<MissingValue> {
     match offset {
         0 => Ok(MissingValue::System),
         1 => Ok(MissingValue::A),
@@ -187,7 +187,7 @@ fn from_code(offset: u32) -> Result<MissingValue, NotMissingValueError> {
         24 => Ok(MissingValue::X),
         25 => Ok(MissingValue::Y),
         26 => Ok(MissingValue::Z),
-        _ => Err(NotMissingValueError),
+        _ => Err(StataError::NotMissingValue),
     }
 }
 
@@ -199,11 +199,11 @@ fn from_code(offset: u32) -> Result<MissingValue, NotMissingValueError> {
 ///
 /// Valid missing byte values are `0x65` (`.`) through `0x7F` (`.z`).
 impl TryFrom<u8> for MissingValue {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> Result<Self> {
         if !(MISSING_BYTE_SYSTEM..=MISSING_BYTE_Z).contains(&value) {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         from_code(u32::from(value - MISSING_BYTE_SYSTEM))
     }
@@ -213,11 +213,11 @@ impl TryFrom<u8> for MissingValue {
 ///
 /// Valid missing int values are `0x7FE5` (`.`) through `0x7FFF` (`.z`).
 impl TryFrom<u16> for MissingValue {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self> {
         if !(MISSING_INT_SYSTEM..=MISSING_INT_Z).contains(&value) {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         from_code(u32::from(value - MISSING_INT_SYSTEM))
     }
@@ -227,11 +227,11 @@ impl TryFrom<u16> for MissingValue {
 ///
 /// Valid missing long values are `0x7FFF_FFE5` (`.`) through `0x7FFF_FFFF` (`.z`).
 impl TryFrom<u32> for MissingValue {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> Result<Self> {
         if !(MISSING_LONG_SYSTEM..=MISSING_LONG_Z).contains(&value) {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         from_code(value - MISSING_LONG_SYSTEM)
     }
@@ -244,19 +244,19 @@ impl TryFrom<u32> for MissingValue {
 /// - `.a` → `0x7F00_0800`
 /// - Each subsequent letter adds a stride of `0x0800`
 impl TryFrom<f32> for MissingValue {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: f32) -> Result<Self, Self::Error> {
+    fn try_from(value: f32) -> Result<Self> {
         let bits = value.to_bits();
         if bits == MISSING_FLOAT_SYSTEM {
             return Ok(MissingValue::System);
         }
         if bits < MISSING_FLOAT_A {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         let offset_raw = bits - MISSING_FLOAT_A;
         if !offset_raw.is_multiple_of(MISSING_FLOAT_STRIDE) {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         let offset = offset_raw / MISSING_FLOAT_STRIDE;
         // offset 0 = .a, so add 1 for from_offset
@@ -271,23 +271,23 @@ impl TryFrom<f32> for MissingValue {
 /// - `.a` → `0x7FE0_0100_0000_0000`
 /// - Each subsequent letter adds a stride of `0x0100_0000_0000`
 impl TryFrom<f64> for MissingValue {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: f64) -> Result<Self, Self::Error> {
+    fn try_from(value: f64) -> Result<Self> {
         let bits = value.to_bits();
         if bits == MISSING_DOUBLE_SYSTEM {
             return Ok(MissingValue::System);
         }
         if bits < MISSING_DOUBLE_A {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         let offset_raw = bits - MISSING_DOUBLE_A;
         if !offset_raw.is_multiple_of(MISSING_DOUBLE_STRIDE) {
-            return Err(NotMissingValueError);
+            return Err(StataError::NotMissingValue);
         }
         let offset = offset_raw / MISSING_DOUBLE_STRIDE;
         // offset 0 = .a, so convert to u32 and add 1
-        let offset = u32::try_from(offset).map_err(|_| NotMissingValueError)?;
+        let offset = u32::try_from(offset).map_err(|_| StataError::NotMissingValue)?;
         from_code(offset + 1)
     }
 }
@@ -588,17 +588,26 @@ mod tests {
 
     #[test]
     fn byte_below_range() {
-        assert_eq!(MissingValue::try_from(0x64_u8), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0x64_u8),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn byte_zero() {
-        assert_eq!(MissingValue::try_from(0_u8), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0_u8),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn byte_max_valid() {
-        assert_eq!(MissingValue::try_from(100_u8), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(100_u8),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -747,13 +756,16 @@ mod tests {
     fn int_below_range() {
         assert_eq!(
             MissingValue::try_from(0x7FE4_u16),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 
     #[test]
     fn int_zero() {
-        assert_eq!(MissingValue::try_from(0_u16), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0_u16),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -980,13 +992,16 @@ mod tests {
     fn long_below_range() {
         assert_eq!(
             MissingValue::try_from(0x7FFF_FFE4_u32),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 
     #[test]
     fn long_zero() {
-        assert_eq!(MissingValue::try_from(0_u32), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0_u32),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1213,23 +1228,32 @@ mod tests {
     fn float_non_missing_nan() {
         assert_eq!(
             MissingValue::try_from(f32::from_bits(0x7F00_0001)),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 
     #[test]
     fn float_normal_value() {
-        assert_eq!(MissingValue::try_from(1.0_f32), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(1.0_f32),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn float_zero() {
-        assert_eq!(MissingValue::try_from(0.0_f32), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0.0_f32),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn float_negative() {
-        assert_eq!(MissingValue::try_from(-1.0_f32), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(-1.0_f32),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1456,23 +1480,32 @@ mod tests {
     fn double_non_missing_nan() {
         assert_eq!(
             MissingValue::try_from(f64::from_bits(0x7FE0_0000_0000_0001)),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 
     #[test]
     fn double_normal_value() {
-        assert_eq!(MissingValue::try_from(1.0_f64), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(1.0_f64),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn double_zero() {
-        assert_eq!(MissingValue::try_from(0.0_f64), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(0.0_f64),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     #[test]
     fn double_negative() {
-        assert_eq!(MissingValue::try_from(-1.0_f64), Err(NotMissingValueError));
+        assert_eq!(
+            MissingValue::try_from(-1.0_f64),
+            Err(StataError::NotMissingValue)
+        );
     }
 
     // -----------------------------------------------------------------------

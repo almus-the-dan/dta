@@ -20,7 +20,7 @@
 /// assert_eq!(missing, StataByte::Missing(MissingValue::System));
 /// ```
 use super::missing_value::MissingValue;
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 /// Maximum valid (non-missing) Stata byte value when interpreted as signed.
 const DTA_113_MAX_INT8: i8 = 100;
@@ -42,9 +42,9 @@ pub enum StataByte {
 /// The byte is reinterpreted as a signed `i8`. If the signed value exceeds
 /// the maximum valid value (100), it is classified as missing.
 impl TryFrom<u8> for StataByte {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> Result<Self> {
         let signed = value.cast_signed();
         if signed > DTA_113_MAX_INT8 {
             Ok(Self::Missing(MissingValue::try_from(value)?))

@@ -18,7 +18,7 @@
 /// assert_eq!(missing, StataFloat::Missing(MissingValue::System));
 /// ```
 use super::missing_value::MissingValue;
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 /// Bit pattern at or above which an `f32` encodes a Stata missing value.
 const MISSING_FLOAT_SYSTEM: u32 = 0x7F00_0000;
@@ -44,9 +44,9 @@ pub enum StataFloat {
 /// as missing. A NaN whose bit pattern falls in the missing range but does
 /// not match one of Stata's 27 specific patterns results in an error.
 impl TryFrom<f32> for StataFloat {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: f32) -> Result<Self, Self::Error> {
+    fn try_from(value: f32) -> Result<Self> {
         let bits = value.to_bits();
         // Stata missing values are positive NaNs with sign bit 0.
         // Negative values have the sign bit set (bit 31), making their
@@ -143,7 +143,7 @@ mod tests {
     fn error_non_stata_nan() {
         // A NaN in the missing range but not matching any of Stata's 27 patterns
         let val = f32::from_bits(0x7F00_0001);
-        assert_eq!(StataFloat::try_from(val), Err(NotMissingValueError));
+        assert_eq!(StataFloat::try_from(val), Err(StataError::NotMissingValue));
     }
 
     #[test]
@@ -151,7 +151,7 @@ mod tests {
         // +Inf has bits 0x7F800000 which is >= MISSING_FLOAT_SYSTEM but not a Stata pattern
         assert_eq!(
             StataFloat::try_from(f32::INFINITY),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 

@@ -19,7 +19,7 @@
 /// assert_eq!(missing, StataInt::Missing(MissingValue::System));
 /// ```
 use super::missing_value::MissingValue;
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 /// Maximum valid (non-missing) Stata int value when interpreted as signed.
 const DTA_113_MAX_INT16: i16 = 32_740;
@@ -41,9 +41,9 @@ pub enum StataInt {
 /// The value is reinterpreted as a signed `i16`. If the signed value exceeds
 /// the maximum valid value (32,740), it is classified as missing.
 impl TryFrom<u16> for StataInt {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
+    fn try_from(value: u16) -> Result<Self> {
         let signed = value.cast_signed();
         if signed > DTA_113_MAX_INT16 {
             Ok(Self::Missing(MissingValue::try_from(value)?))

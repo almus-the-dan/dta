@@ -1,5 +1,7 @@
 use core::fmt;
 
+use super::stata_error::Result;
+
 /// A parsed timestamp from a DTA file header.
 ///
 /// DTA files encode timestamps as fixed-length strings in the format
@@ -15,46 +17,38 @@ pub struct StataTimestamp {
     minute: u8,
 }
 
-/// Error returned when a timestamp string does not match the expected
-/// DTA format `"dd Mon yyyy hh:mm"`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidTimestamp(String);
-
-impl fmt::Display for InvalidTimestamp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid DTA timestamp: {:?}", self.0)
-    }
-}
-
-impl std::error::Error for InvalidTimestamp {}
-
 impl StataTimestamp {
     /// Parses a DTA timestamp string in the format `"dd Mon yyyy hh:mm"`.
-    pub fn parse(_s: &str) -> Result<Self, InvalidTimestamp> {
+    pub fn parse(_s: &str) -> Result<Self> {
         todo!()
     }
 
     /// Day of the month (1–31).
+    #[must_use]
     pub fn day(&self) -> u8 {
         self.day
     }
 
     /// Month of the year (1–12).
+    #[must_use]
     pub fn month(&self) -> u8 {
         self.month
     }
 
     /// Four-digit year.
+    #[must_use]
     pub fn year(&self) -> u16 {
         self.year
     }
 
     /// Hour (0–23).
+    #[must_use]
     pub fn hour(&self) -> u8 {
         self.hour
     }
 
     /// Minute (0–59).
+    #[must_use]
     pub fn minute(&self) -> u8 {
         self.minute
     }

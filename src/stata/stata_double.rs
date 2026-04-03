@@ -19,7 +19,7 @@
 /// assert_eq!(missing, StataDouble::Missing(MissingValue::System));
 /// ```
 use super::missing_value::MissingValue;
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 /// Bit pattern at or above which an `f64` encodes a Stata missing value.
 const MISSING_DOUBLE_SYSTEM: u64 = 0x7FE0_0000_0000_0000;
@@ -45,9 +45,9 @@ pub enum StataDouble {
 /// classified as missing. A NaN whose bit pattern falls in the missing range
 /// but does not match one of Stata's 27 specific patterns results in an error.
 impl TryFrom<f64> for StataDouble {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: f64) -> Result<Self, Self::Error> {
+    fn try_from(value: f64) -> Result<Self> {
         let bits = value.to_bits();
         // Stata missing values are positive NaNs with sign bit 0.
         // Negative values have the sign bit set (bit 63), making their
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn error_non_stata_nan() {
         let val = f64::from_bits(0x7FE0_0000_0000_0001);
-        assert_eq!(StataDouble::try_from(val), Err(NotMissingValueError));
+        assert_eq!(StataDouble::try_from(val), Err(StataError::NotMissingValue));
     }
 
     #[test]
@@ -154,7 +154,7 @@ mod tests {
         // +Inf has bits 0x7FF0000000000000 which is >= MISSING_DOUBLE_SYSTEM but not a Stata pattern
         assert_eq!(
             StataDouble::try_from(f64::INFINITY),
-            Err(NotMissingValueError)
+            Err(StataError::NotMissingValue)
         );
     }
 

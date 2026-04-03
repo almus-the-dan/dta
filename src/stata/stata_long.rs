@@ -19,7 +19,7 @@
 /// assert_eq!(missing, StataLong::Missing(MissingValue::System));
 /// ```
 use super::missing_value::MissingValue;
-use super::not_missing_value_error::NotMissingValueError;
+use super::stata_error::{Result, StataError};
 
 /// Maximum valid (non-missing) Stata long value when interpreted as signed.
 const DTA_113_MAX_INT32: i32 = 2_147_483_620;
@@ -41,9 +41,9 @@ pub enum StataLong {
 /// The value is reinterpreted as a signed `i32`. If the signed value exceeds
 /// the maximum valid value (2,147,483,620), it is classified as missing.
 impl TryFrom<u32> for StataLong {
-    type Error = NotMissingValueError;
+    type Error = StataError;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> Result<Self> {
         let signed = value.cast_signed();
         if signed > DTA_113_MAX_INT32 {
             Ok(Self::Missing(MissingValue::try_from(value)?))
