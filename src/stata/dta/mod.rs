@@ -24,4 +24,5 @@ pub mod value_label;
 pub mod value_label_reader;
 
 pub mod dta_reader;
+pub mod dta_reader_options;
 mod reader_state;

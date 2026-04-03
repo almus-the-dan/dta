@@ -2,12 +2,11 @@ use std::io::{BufRead, Read, Seek};
 
 use encoding_rs::Encoding;
 
-use super::reader_state::ReaderState;
 use super::schema_reader::SchemaReader;
 
 /// Entry point for reading a DTA file.
 ///
-/// Created via [`DtaReader::new`](super::dta_reader::DtaReader::new),
+/// Created via [`DtaReader::new`](super::dta_reader::DtaReader::from_reader),
 /// then call [`read_header`](Self::read_header) to parse the file header
 /// and advance to schema reading.
 #[derive(Debug)]
