@@ -1,5 +1,6 @@
 use std::io::{BufRead, Seek};
 
+use super::dta_error::Result;
 use super::header::Header;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
@@ -37,19 +38,19 @@ impl<R: BufRead> LongStringReader<R> {
 
     /// Consumes all remaining long-string entries without processing
     /// them.
-    pub fn read_to_end(&mut self) -> Result<(), std::io::Error> {
+    pub fn read_to_end(&mut self) -> Result<()> {
         todo!()
     }
 }
 
 impl<R: BufRead + Seek> LongStringReader<R> {
     /// Seeks back to the data section.
-    pub fn seek_records(self) -> Result<RecordReader<R>, std::io::Error> {
+    pub fn seek_records(self) -> Result<RecordReader<R>> {
         todo!()
     }
 
     /// Seeks back to the value-label section.
-    pub fn seek_value_labels(self) -> Result<ValueLabelReader<R>, std::io::Error> {
+    pub fn seek_value_labels(self) -> Result<ValueLabelReader<R>> {
         todo!()
     }
 }

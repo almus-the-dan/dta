@@ -1,5 +1,7 @@
 use core::fmt;
 
+use super::dta_error::FormatErrorKind;
+
 /// Byte order (endianness) of values in a DTA file.
 ///
 /// Formats 113–117 encode this as a single byte (`0x01` = big-endian,
@@ -27,57 +29,25 @@ impl fmt::Display for ByteOrder {
 }
 
 // ---------------------------------------------------------------------------
-// TryFrom<&str> — v118+ string tags
+// Parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Error returned when a string is not a valid byte-order tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidByteOrderString;
-
-impl fmt::Display for InvalidByteOrderString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("expected \"MSF\" or \"LSF\"")
-    }
-}
-
-impl std::error::Error for InvalidByteOrderString {}
-
-impl TryFrom<&str> for ByteOrder {
-    type Error = InvalidByteOrderString;
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
+impl ByteOrder {
+    /// Parses a v118+ string tag (`"MSF"` or `"LSF"`).
+    pub(crate) fn from_tag(s: &str) -> Result<Self, FormatErrorKind> {
         match s {
             "MSF" => Ok(Self::BigEndian),
             "LSF" => Ok(Self::LittleEndian),
-            _ => Err(InvalidByteOrderString),
+            _ => Err(FormatErrorKind::InvalidByteOrderTag),
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// TryFrom<u8> — v113–117 binary representation
-// ---------------------------------------------------------------------------
-
-/// Error returned when a byte is not a valid byte-order code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InvalidByteOrderByte(pub u8);
-
-impl fmt::Display for InvalidByteOrderByte {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "expected 0x01 or 0x02, got {:#04X}", self.0)
-    }
-}
-
-impl std::error::Error for InvalidByteOrderByte {}
-
-impl TryFrom<u8> for ByteOrder {
-    type Error = InvalidByteOrderByte;
-
-    fn try_from(b: u8) -> Result<Self, Self::Error> {
+    /// Parses a v113–117 binary byte-order code (`0x01` or `0x02`).
+    pub(crate) fn from_byte(b: u8) -> Result<Self, FormatErrorKind> {
         match b {
             0x01 => Ok(Self::BigEndian),
             0x02 => Ok(Self::LittleEndian),
-            _ => Err(InvalidByteOrderByte(b)),
+            _ => Err(FormatErrorKind::InvalidByteOrder { byte: b }),
         }
     }
 }
@@ -97,35 +67,38 @@ mod tests {
     }
 
     #[test]
-    fn try_from_str_msf() {
-        assert_eq!(ByteOrder::try_from("MSF"), Ok(ByteOrder::BigEndian));
+    fn from_tag_msf() {
+        assert_eq!(ByteOrder::from_tag("MSF"), Ok(ByteOrder::BigEndian));
     }
 
     #[test]
-    fn try_from_str_lsf() {
-        assert_eq!(ByteOrder::try_from("LSF"), Ok(ByteOrder::LittleEndian));
+    fn from_tag_lsf() {
+        assert_eq!(ByteOrder::from_tag("LSF"), Ok(ByteOrder::LittleEndian));
     }
 
     #[test]
-    fn try_from_str_invalid() {
-        assert!(ByteOrder::try_from("XYZ").is_err());
-    }
-
-    #[test]
-    fn try_from_u8_hilo() {
-        assert_eq!(ByteOrder::try_from(0x01_u8), Ok(ByteOrder::BigEndian));
-    }
-
-    #[test]
-    fn try_from_u8_lohi() {
-        assert_eq!(ByteOrder::try_from(0x02_u8), Ok(ByteOrder::LittleEndian));
-    }
-
-    #[test]
-    fn try_from_u8_invalid() {
+    fn from_tag_invalid() {
         assert_eq!(
-            ByteOrder::try_from(0x00_u8),
-            Err(InvalidByteOrderByte(0x00))
+            ByteOrder::from_tag("XYZ"),
+            Err(FormatErrorKind::InvalidByteOrderTag),
+        );
+    }
+
+    #[test]
+    fn from_byte_big_endian() {
+        assert_eq!(ByteOrder::from_byte(0x01), Ok(ByteOrder::BigEndian));
+    }
+
+    #[test]
+    fn from_byte_little_endian() {
+        assert_eq!(ByteOrder::from_byte(0x02), Ok(ByteOrder::LittleEndian));
+    }
+
+    #[test]
+    fn from_byte_invalid() {
+        assert_eq!(
+            ByteOrder::from_byte(0x00),
+            Err(FormatErrorKind::InvalidByteOrder { byte: 0x00 }),
         );
     }
 }

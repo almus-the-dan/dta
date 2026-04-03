@@ -1,5 +1,11 @@
 /// Byte order (endianness) representation.
 pub mod byte_order;
+/// Unified error type for the DTA reader.
+pub mod dta_error;
+/// Creates a header reader.
+pub mod dta_reader;
+/// Allows configuring a reader.
+pub mod dta_reader_options;
 /// Parsed DTA file header.
 pub mod header;
 /// Entry point for reading a DTA file.
@@ -10,6 +16,7 @@ pub mod long_string;
 pub mod long_string_reader;
 /// Unresolved reference to a long string in the strL section.
 pub mod long_string_ref;
+mod reader_state;
 /// Reads observation records from the data section.
 pub mod record_reader;
 /// Variable definitions and layout.
@@ -22,7 +29,3 @@ pub mod value;
 pub mod value_label;
 /// Reads value-label tables from a DTA file.
 pub mod value_label_reader;
-
-pub mod dta_reader;
-pub mod dta_reader_options;
-mod reader_state;

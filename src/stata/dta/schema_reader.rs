@@ -1,5 +1,6 @@
 use std::io::{BufRead, Seek};
 
+use super::dta_error::Result;
 use super::header::Header;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
@@ -25,7 +26,7 @@ impl<R> SchemaReader<R> {
 
 impl<R: BufRead + Seek> SchemaReader<R> {
     /// Parses variable definitions and transitions to data reading.
-    pub fn read_schema(mut self) -> Result<RecordReader<R>, std::io::Error> {
+    pub fn read_schema(mut self) -> Result<RecordReader<R>> {
         todo!()
     }
 }

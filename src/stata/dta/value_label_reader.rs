@@ -1,5 +1,6 @@
 use std::io::{BufRead, Seek};
 
+use super::dta_error::Result;
 use super::header::Header;
 use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
@@ -41,7 +42,7 @@ impl<R: BufRead> ValueLabelReader<R> {
     ///
     /// Returns `None` if the format version does not support long
     /// strings (pre-118).
-    pub fn read_to_end(&mut self) -> Result<(), std::io::Error> {
+    pub fn read_to_end(&mut self) -> Result<()> {
         todo!()
     }
 
@@ -50,7 +51,7 @@ impl<R: BufRead> ValueLabelReader<R> {
     ///
     /// Returns `None` if the format version does not support long
     /// strings (pre-118).
-    pub fn read_long_strings(mut self) -> Result<Option<LongStringReader<R>>, std::io::Error> {
+    pub fn read_long_strings(mut self) -> Result<Option<LongStringReader<R>>> {
         todo!()
     }
 }
@@ -60,12 +61,12 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
     ///
     /// Returns `None` if the format version does not support long
     /// strings (pre-118).
-    pub fn seek_long_strings(mut self) -> Result<Option<LongStringReader<R>>, std::io::Error> {
+    pub fn seek_long_strings(mut self) -> Result<Option<LongStringReader<R>>> {
         todo!()
     }
 
     /// Seeks back to the data section.
-    pub fn seek_data(mut self) -> Result<RecordReader<R>, std::io::Error> {
+    pub fn seek_data(mut self) -> Result<RecordReader<R>> {
         todo!()
     }
 }
