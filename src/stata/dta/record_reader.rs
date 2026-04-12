@@ -45,6 +45,7 @@ impl<R: BufRead> RecordReader<R> {
         todo!()
     }
 
+    /// Consumes remaining records and transitions to value-label reading.
     pub fn read_value_labels(mut self) -> Result<ValueLabelReader<R>> {
         todo!()
     }

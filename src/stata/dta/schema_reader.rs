@@ -17,6 +17,10 @@ pub struct SchemaReader<R> {
 }
 
 impl<R> SchemaReader<R> {
+    pub(crate) fn new(state: ReaderState<R>, header: Header) -> Self {
+        Self { state, header }
+    }
+
     /// The parsed file header.
     #[must_use]
     pub fn header(&self) -> &Header {

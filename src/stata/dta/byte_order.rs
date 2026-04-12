@@ -42,6 +42,16 @@ impl ByteOrder {
         }
     }
 
+    /// Returns the binary byte-order code (`0x01` or `0x02`).
+    #[must_use]
+    #[inline]
+    pub(crate) fn to_byte(self) -> u8 {
+        match self {
+            Self::BigEndian => 0x01,
+            Self::LittleEndian => 0x02,
+        }
+    }
+
     /// Parses a v113–117 binary byte-order code (`0x01` or `0x02`).
     pub(crate) fn from_byte(b: u8) -> Result<Self, FormatErrorKind> {
         match b {

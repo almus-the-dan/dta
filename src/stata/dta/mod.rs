@@ -19,6 +19,8 @@ pub mod long_string_ref;
 mod reader_state;
 /// Reads observation records from the data section.
 pub mod record_reader;
+/// DTA format version (release number).
+pub mod release;
 /// Variable definitions and layout.
 pub mod schema;
 /// Reads variable definitions from a DTA file.
