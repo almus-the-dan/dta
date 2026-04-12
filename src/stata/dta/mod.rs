@@ -31,3 +31,7 @@ pub mod value;
 pub mod value_label;
 /// Reads value-label tables from a DTA file.
 pub mod value_label_reader;
+/// Single variable (column) definition.
+pub mod variable;
+/// Variable storage type.
+pub mod variable_type;

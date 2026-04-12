@@ -19,14 +19,24 @@ pub struct RecordReader<R> {
 }
 
 impl<R> RecordReader<R> {
+    pub(crate) fn new(state: ReaderState<R>, header: Header, schema: Schema) -> Self {
+        Self {
+            state,
+            header,
+            schema,
+        }
+    }
+
     /// The parsed file header.
     #[must_use]
+    #[inline]
     pub fn header(&self) -> &Header {
         &self.header
     }
 
     /// The parsed variable definitions.
     #[must_use]
+    #[inline]
     pub fn schema(&self) -> &Schema {
         &self.schema
     }

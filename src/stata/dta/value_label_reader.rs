@@ -23,12 +23,14 @@ pub struct ValueLabelReader<R> {
 impl<R> ValueLabelReader<R> {
     /// The parsed file header.
     #[must_use]
+    #[inline]
     pub fn header(&self) -> &Header {
         &self.header
     }
 
     /// The parsed variable definitions.
     #[must_use]
+    #[inline]
     pub fn schema(&self) -> &Schema {
         &self.schema
     }

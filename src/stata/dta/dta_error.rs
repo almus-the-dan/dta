@@ -243,18 +243,21 @@ impl FormatError {
 
     /// The section of the file where the error occurred.
     #[must_use]
+    #[inline]
     pub fn section(&self) -> Section {
         self.section
     }
 
     /// The byte offset in the file where the error was detected.
     #[must_use]
+    #[inline]
     pub fn position(&self) -> u64 {
         self.position
     }
 
     /// The specific kind of format violation.
     #[must_use]
+    #[inline]
     pub fn kind(&self) -> FormatErrorKind {
         self.kind
     }
@@ -284,6 +287,13 @@ pub enum DtaError {
     },
     /// The file contents violate the DTA format specification.
     Format(FormatError),
+    /// A sort-order entry references a nonexistent variable.
+    SortOrderOutOfBounds {
+        /// The 0-based sort-order index that was out of range.
+        index: u32,
+        /// The number of variables in the schema.
+        variable_count: usize,
+    },
 }
 
 impl DtaError {
@@ -300,9 +310,11 @@ impl DtaError {
 
     /// The section of the file where the error occurred.
     #[must_use]
+    #[inline]
     pub fn section(&self) -> Section {
         match self {
             Self::Io { section, .. } | Self::Format(FormatError { section, .. }) => *section,
+            Self::SortOrderOutOfBounds { .. } => Section::Schema,
         }
     }
 }
@@ -314,6 +326,15 @@ impl fmt::Display for DtaError {
                 write!(f, "I/O error in {section} section: {source}")
             }
             Self::Format(err) => fmt::Display::fmt(err, f),
+            Self::SortOrderOutOfBounds {
+                index,
+                variable_count,
+            } => {
+                write!(
+                    f,
+                    "sort-order index {index} is out of bounds for {variable_count} variables",
+                )
+            }
         }
     }
 }
@@ -322,7 +343,7 @@ impl std::error::Error for DtaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Format(_) => None,
+            Self::Format(_) | Self::SortOrderOutOfBounds { .. } => None,
         }
     }
 }

@@ -12,12 +12,14 @@ pub struct ValueLabelTable {
 impl ValueLabelTable {
     /// The name of this value-label table.
     #[must_use]
+    #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// The label entries in this table.
     #[must_use]
+    #[inline]
     pub fn entries(&self) -> &[ValueLabelEntry] {
         &self.entries
     }
@@ -33,12 +35,14 @@ pub struct ValueLabelEntry {
 impl ValueLabelEntry {
     /// The integer value.
     #[must_use]
+    #[inline]
     pub fn value(&self) -> i32 {
         self.value
     }
 
     /// The label text, decoded using the file's encoding.
     #[must_use]
+    #[inline]
     pub fn label(&self) -> &str {
         &self.label
     }

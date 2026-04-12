@@ -13,12 +13,14 @@ pub struct LongStringRef {
 impl LongStringRef {
     /// One-based variable index.
     #[must_use]
+    #[inline]
     pub fn variable(&self) -> u32 {
         self.variable
     }
 
     /// One-based observation index.
     #[must_use]
+    #[inline]
     pub fn observation(&self) -> u64 {
         self.observation
     }

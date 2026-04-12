@@ -9,18 +9,21 @@ pub struct DtaReaderOptions {
 impl DtaReaderOptions {
     /// Returns a new [`DtaReaderOptionsBuilder`].
     #[must_use]
+    #[inline]
     pub fn builder() -> DtaReaderOptionsBuilder {
         DtaReaderOptionsBuilder::new()
     }
 
     /// The encoding override, if set.
     #[must_use]
+    #[inline]
     pub fn encoding(&self) -> Option<&'static Encoding> {
         self.encoding
     }
 }
 
 impl Default for DtaReaderOptions {
+    #[inline]
     fn default() -> Self {
         DtaReaderOptionsBuilder::new().build()
     }
@@ -35,6 +38,7 @@ pub struct DtaReaderOptionsBuilder {
 impl DtaReaderOptionsBuilder {
     /// Creates a new builder with default values.
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self { encoding: None }
     }
@@ -42,6 +46,7 @@ impl DtaReaderOptionsBuilder {
     /// Sets an explicit encoding override, used regardless of format
     /// version.
     #[must_use]
+    #[inline]
     pub fn encoding(mut self, encoding: &'static Encoding) -> Self {
         self.encoding = Some(encoding);
         self
@@ -49,6 +54,7 @@ impl DtaReaderOptionsBuilder {
 
     /// Builds the [`DtaReaderOptions`].
     #[must_use]
+    #[inline]
     pub fn build(self) -> DtaReaderOptions {
         DtaReaderOptions {
             encoding: self.encoding,
@@ -57,6 +63,7 @@ impl DtaReaderOptionsBuilder {
 }
 
 impl Default for DtaReaderOptionsBuilder {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }

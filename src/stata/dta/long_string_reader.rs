@@ -22,12 +22,14 @@ pub struct LongStringReader<R> {
 impl<R> LongStringReader<R> {
     /// The parsed file header.
     #[must_use]
+    #[inline]
     pub fn header(&self) -> &Header {
         &self.header
     }
 
     /// The parsed variable definitions.
     #[must_use]
+    #[inline]
     pub fn schema(&self) -> &Schema {
         &self.schema
     }

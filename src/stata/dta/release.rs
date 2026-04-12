@@ -165,6 +165,90 @@ impl Release {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Schema layout queries
+// ---------------------------------------------------------------------------
+
+impl Release {
+    /// The width of each type-list entry in bytes.
+    ///
+    /// Formats before 117 use 1-byte type codes; 117+ use 2-byte codes
+    /// (needed for strL and the wider numeric codes).
+    #[must_use]
+    pub(crate) fn type_list_entry_len(self) -> usize {
+        if self >= Self::V117 { 2 } else { 1 }
+    }
+
+    /// Fixed-length variable name field size (includes null terminator).
+    #[must_use]
+    pub(crate) fn variable_name_len(self) -> usize {
+        if self >= Self::V118 {
+            129
+        } else if self >= Self::V110 {
+            33
+        } else {
+            9
+        }
+    }
+
+    /// Fixed-length display format field size.
+    #[must_use]
+    pub(crate) fn format_entry_len(self) -> usize {
+        if self >= Self::V118 {
+            57
+        } else if self >= Self::V114 {
+            49
+        } else if self >= Self::V105 {
+            12
+        } else {
+            7
+        }
+    }
+
+    /// Fixed-length value-label name field size.
+    ///
+    /// Matches [`variable_name_len`](Self::variable_name_len) for all
+    /// format versions.
+    #[must_use]
+    pub(crate) fn value_label_name_len(self) -> usize {
+        self.variable_name_len()
+    }
+
+    /// Fixed-length variable label field size.
+    #[must_use]
+    pub(crate) fn variable_label_len(self) -> usize {
+        if self >= Self::V118 {
+            321
+        } else if self >= Self::V108 {
+            81
+        } else {
+            32
+        }
+    }
+
+    /// Width of each sort-list entry: 2 bytes (`u16`) for pre-119,
+    /// 4 bytes (`u32`) for 119+.
+    #[must_use]
+    pub(crate) fn sort_entry_len(self) -> usize {
+        if self >= Self::V119 { 4 } else { 2 }
+    }
+
+    /// Width of the length field in binary expansion-field entries.
+    ///
+    /// Returns 0 for format 104 (no expansion fields), 2 for 105–109,
+    /// and 4 for 110+.
+    #[must_use]
+    pub(crate) fn expansion_len_width(self) -> usize {
+        if self >= Self::V110 {
+            4
+        } else if self >= Self::V105 {
+            2
+        } else {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +385,88 @@ mod tests {
     fn long_observation_count_118_plus() {
         assert!(Release::V118.supports_extended_observation_count());
         assert!(Release::V119.supports_extended_observation_count());
+    }
+
+    // -- type_list_entry_len ---------------------------------------------------
+
+    #[test]
+    fn type_list_entry_len_pre_117() {
+        assert_eq!(Release::V104.type_list_entry_len(), 1);
+        assert_eq!(Release::V111.type_list_entry_len(), 1);
+        assert_eq!(Release::V116.type_list_entry_len(), 1);
+    }
+
+    #[test]
+    fn type_list_entry_len_117_plus() {
+        assert_eq!(Release::V117.type_list_entry_len(), 2);
+        assert_eq!(Release::V118.type_list_entry_len(), 2);
+        assert_eq!(Release::V119.type_list_entry_len(), 2);
+    }
+
+    // -- variable_name_len ---------------------------------------------------
+
+    #[test]
+    fn variable_name_len_boundaries() {
+        assert_eq!(Release::V104.variable_name_len(), 9);
+        assert_eq!(Release::V109.variable_name_len(), 9);
+        assert_eq!(Release::V110.variable_name_len(), 33);
+        assert_eq!(Release::V117.variable_name_len(), 33);
+        assert_eq!(Release::V118.variable_name_len(), 129);
+        assert_eq!(Release::V119.variable_name_len(), 129);
+    }
+
+    // -- format_entry_len ----------------------------------------------------
+
+    #[test]
+    fn format_entry_len_boundaries() {
+        assert_eq!(Release::V104.format_entry_len(), 7);
+        assert_eq!(Release::V105.format_entry_len(), 12);
+        assert_eq!(Release::V113.format_entry_len(), 12);
+        assert_eq!(Release::V114.format_entry_len(), 49);
+        assert_eq!(Release::V117.format_entry_len(), 49);
+        assert_eq!(Release::V118.format_entry_len(), 57);
+        assert_eq!(Release::V119.format_entry_len(), 57);
+    }
+
+    // -- value_label_name_len ------------------------------------------------
+
+    #[test]
+    fn value_label_name_len_matches_variable_name_len() {
+        for v in 104..=119 {
+            let r = Release::try_from(v).unwrap();
+            assert_eq!(r.value_label_name_len(), r.variable_name_len());
+        }
+    }
+
+    // -- variable_label_len --------------------------------------------------
+
+    #[test]
+    fn variable_label_len_boundaries() {
+        assert_eq!(Release::V104.variable_label_len(), 32);
+        assert_eq!(Release::V107.variable_label_len(), 32);
+        assert_eq!(Release::V108.variable_label_len(), 81);
+        assert_eq!(Release::V117.variable_label_len(), 81);
+        assert_eq!(Release::V118.variable_label_len(), 321);
+        assert_eq!(Release::V119.variable_label_len(), 321);
+    }
+
+    // -- sort_entry_len ------------------------------------------------------
+
+    #[test]
+    fn sort_entry_len_boundaries() {
+        assert_eq!(Release::V104.sort_entry_len(), 2);
+        assert_eq!(Release::V118.sort_entry_len(), 2);
+        assert_eq!(Release::V119.sort_entry_len(), 4);
+    }
+
+    // -- expansion_len_width -------------------------------------------------
+
+    #[test]
+    fn expansion_len_width_boundaries() {
+        assert_eq!(Release::V104.expansion_len_width(), 0);
+        assert_eq!(Release::V105.expansion_len_width(), 2);
+        assert_eq!(Release::V109.expansion_len_width(), 2);
+        assert_eq!(Release::V110.expansion_len_width(), 4);
+        assert_eq!(Release::V119.expansion_len_width(), 4);
     }
 }

@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 
 use encoding_rs::Encoding;
 
@@ -67,7 +67,9 @@ impl<R: Read> ReaderState<R> {
     }
 
     pub fn read_u8(&mut self, section: Section) -> Result<u8> {
-        Ok(self.read_exact(1, section)?[0])
+        let buffer = self.read_exact(1, section)?;
+        let byte = buffer[0];
+        Ok(byte)
     }
 
     pub fn read_u16(&mut self, byte_order: ByteOrder, section: Section) -> Result<u16> {
@@ -114,7 +116,24 @@ impl<R: Read> ReaderState<R> {
         }
         Ok(())
     }
+}
 
+// -- Seeking ------------------------------------------------------------------
+
+impl<R: Seek> ReaderState<R> {
+    /// Seeks to an absolute byte position in the underlying reader.
+    pub fn seek_to(&mut self, position: u64, section: Section) -> Result<()> {
+        self.reader
+            .seek(SeekFrom::Start(position))
+            .map_err(|e| DtaError::io(section, e))?;
+        self.position = position;
+        Ok(())
+    }
+}
+
+// -- String reading -----------------------------------------------------------
+
+impl<R: Read> ReaderState<R> {
     /// Reads a fixed-length byte field and decodes it as a
     /// null-terminated string. Returns an empty string when `len` is 0.
     ///
@@ -133,14 +152,15 @@ impl<R: Read> ReaderState<R> {
         let position = self.position;
         let buffer = self.read_exact(len, section)?;
         let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
-        let (decoded, had_errors) = encoding.decode_without_bom_handling(&buffer[..end]);
-        if had_errors {
-            return Err(DtaError::format(
-                section,
-                position,
-                FormatErrorKind::InvalidEncoding { field },
-            ));
-        }
+        let decoded = encoding
+            .decode_without_bom_handling_and_without_replacement(&buffer[..end])
+            .ok_or_else(|| {
+                DtaError::format(
+                    section,
+                    position,
+                    FormatErrorKind::InvalidEncoding { field },
+                )
+            })?;
         Ok(decoded.into_owned())
     }
 }
