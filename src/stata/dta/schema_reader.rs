@@ -1,10 +1,10 @@
-use std::io::{BufRead, Read, Seek};
+use std::io::{BufRead, Read};
 
 use super::byte_order::ByteOrder;
+use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::reader_state::ReaderState;
-use super::record_reader::RecordReader;
 use super::release::Release;
 use super::schema::Schema;
 use super::variable::Variable;
@@ -38,20 +38,21 @@ impl<R> SchemaReader<R> {
 // Public API
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead + Seek> SchemaReader<R> {
-    /// Parses variable definitions and transitions to data reading.
+impl<R: BufRead> SchemaReader<R> {
+    /// Parses variable definitions and transitions to characteristic
+    /// reading.
     ///
     /// Reads type codes, variable names, sort order, display formats,
     /// value-label associations, and variable labels. For XML formats,
-    /// reads the section map and seeks past characteristics. For binary
-    /// formats, reads through expansion fields sequentially.
+    /// also reads the section map. The stream is left positioned at
+    /// the start of the characteristics section.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures and
     /// [`DtaError::Format`] when the schema bytes violate the DTA
     /// format specification.
-    pub fn read_schema(mut self) -> Result<RecordReader<R>> {
+    pub fn read_schema(mut self) -> Result<CharacteristicReader<R>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let variable_count = usize::try_from(self.header.variable_count())
@@ -59,12 +60,9 @@ impl<R: BufRead + Seek> SchemaReader<R> {
 
         // XML formats store section offsets in a map before the
         // descriptors; binary formats have no map.
-        let data_offset = if release.is_xml_like() {
-            let offset = self.read_map(byte_order)?;
-            Some(offset)
-        } else {
-            None
-        };
+        if release.is_xml_like() {
+            self.read_map(byte_order)?;
+        }
 
         let variable_types = self.read_variable_types(variable_count, release, byte_order)?;
         let variable_names = self.read_variable_names(variable_count, release)?;
@@ -72,17 +70,6 @@ impl<R: BufRead + Seek> SchemaReader<R> {
         let formats = self.read_formats(variable_count, release)?;
         let value_label_names = self.read_value_label_names(variable_count, release)?;
         let variable_labels = self.read_variable_labels(variable_count, release)?;
-
-        // Position the stream at the start of the data section.
-        if let Some(offset) = data_offset {
-            // XML: the map told us where <data> lives — seek there,
-            // skipping the (potentially large) characteristics section.
-            self.state.seek_to(offset, Section::Schema)?;
-        } else {
-            // Binary: expansion fields sit between the descriptors and
-            // data.  Read through them to advance to data.
-            self.skip_binary_expansion_fields(release, byte_order)?;
-        }
 
         let variables = assemble_variables(
             variable_types,
@@ -96,7 +83,7 @@ impl<R: BufRead + Seek> SchemaReader<R> {
             .variables(variables)
             .sort_order(sort_order)
             .build()?;
-        Ok(RecordReader::new(self.state, self.header, schema))
+        Ok(CharacteristicReader::new(self.state, self.header, schema))
     }
 }
 
@@ -319,57 +306,6 @@ impl<R: Read> SchemaReader<R> {
 
         self.expect_tag(close_tag)?;
         Ok(result)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Binary expansion fields (pre-117)
-// ---------------------------------------------------------------------------
-
-impl<R: Read> SchemaReader<R> {
-    /// Reads and discards binary expansion-field entries.
-    ///
-    /// Each entry is: `[u8 data_type] [u16|u32 length] [length bytes]`.
-    /// The section ends when both `data_type` and `length` are zero.
-    /// Format 104 has no expansion fields at all.
-    fn skip_binary_expansion_fields(
-        &mut self,
-        release: Release,
-        byte_order: ByteOrder,
-    ) -> Result<()> {
-        let len_width = release.expansion_len_width();
-        if len_width == 0 {
-            return Ok(());
-        }
-
-        loop {
-            let data_type = self.state.read_u8(Section::Schema)?;
-            let length = if len_width == 2 {
-                let length = self.state.read_u16(byte_order, Section::Schema)?;
-                u64::from(length)
-            } else {
-                let length = self.state.read_u32(byte_order, Section::Schema)?;
-                u64::from(length)
-            };
-
-            if data_type == 0 && length == 0 {
-                break;
-            }
-
-            let skip_len = usize::try_from(length).map_err(|_| {
-                DtaError::format(
-                    Section::Schema,
-                    self.state.position(),
-                    FormatErrorKind::Truncated {
-                        expected: length,
-                        actual: 0,
-                    },
-                )
-            })?;
-            self.state.skip(skip_len, Section::Schema)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -885,7 +821,7 @@ mod tests {
             match byte_order {
                 ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count_u32.to_be_bytes()),
                 ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&variable_count_u32.to_le_bytes())
+                    buffer.extend_from_slice(&variable_count_u32.to_le_bytes());
                 }
             }
         } else {
@@ -893,7 +829,7 @@ mod tests {
             match byte_order {
                 ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count_u16.to_be_bytes()),
                 ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&variable_count_u16.to_le_bytes())
+                    buffer.extend_from_slice(&variable_count_u16.to_le_bytes());
                 }
             }
         }
