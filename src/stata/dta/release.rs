@@ -233,6 +233,21 @@ impl Release {
         if self >= Self::V119 { 4 } else { 2 }
     }
 
+    /// Maximum byte length of a fixed-length string variable.
+    ///
+    /// Formats 104–110 support str1–str80, 111–116 support str1–str244,
+    /// and 117+ support str1–str2045.
+    #[must_use]
+    pub(crate) fn max_fixed_string_len(self) -> u16 {
+        if self >= Self::V117 {
+            2045
+        } else if self >= Self::V111 {
+            244
+        } else {
+            80
+        }
+    }
+
     /// Width of the length field in binary expansion-field entries.
     ///
     /// Returns 0 for format 104 (no expansion fields), 2 for 105–109,
@@ -468,5 +483,17 @@ mod tests {
         assert_eq!(Release::V109.expansion_len_width(), 2);
         assert_eq!(Release::V110.expansion_len_width(), 4);
         assert_eq!(Release::V119.expansion_len_width(), 4);
+    }
+
+    // -- max_fixed_string_len ------------------------------------------------
+
+    #[test]
+    fn max_fixed_string_len_boundaries() {
+        assert_eq!(Release::V104.max_fixed_string_len(), 80);
+        assert_eq!(Release::V110.max_fixed_string_len(), 80);
+        assert_eq!(Release::V111.max_fixed_string_len(), 244);
+        assert_eq!(Release::V116.max_fixed_string_len(), 244);
+        assert_eq!(Release::V117.max_fixed_string_len(), 2045);
+        assert_eq!(Release::V119.max_fixed_string_len(), 2045);
     }
 }
