@@ -1,5 +1,6 @@
 use std::io::{BufRead, Seek};
 
+use super::characteristic::Characteristic;
 use super::dta_error::{DtaError, Result, Section};
 use super::header::Header;
 use super::long_string_reader::LongStringReader;
@@ -14,8 +15,8 @@ use super::value_label_reader::ValueLabelReader;
 /// For binary formats (104–116), reads expansion fields.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous phases.
-/// Call [`read_records`](Self::read_records) to consume
-/// characteristics and advance to data reading.
+/// Call [`into_record_reader`](Self::into_record_reader) after
+/// consuming all entries to advance to data reading.
 #[derive(Debug)]
 pub struct CharacteristicReader<R> {
     state: ReaderState<R>,
@@ -49,16 +50,36 @@ impl<R> CharacteristicReader<R> {
 }
 
 impl<R: BufRead> CharacteristicReader<R> {
-    // TODO: iteration over characteristic entries
-
-    /// Consumes all remaining characteristic entries without
-    /// processing them.
-    pub fn read_to_end(&mut self) -> Result<()> {
+    /// Reads the next characteristic entry.
+    ///
+    /// Returns `None` when all entries have been consumed. For XML
+    /// formats, each entry is a `<ch>` element containing a
+    /// length-prefixed record with variable name, characteristic name,
+    /// and contents. For binary formats, each entry is an expansion
+    /// field with a type byte and length-prefixed payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] when the entry bytes violate the DTA
+    /// format specification.
+    pub fn read_characteristic(&mut self) -> Result<Option<Characteristic>> {
         todo!()
     }
 
-    /// Consumes characteristics and transitions to record reading.
-    pub fn read_records(mut self) -> Result<RecordReader<R>> {
+    /// Skips all remaining characteristic entries without processing
+    /// them.
+    pub fn skip_to_end(&mut self) -> Result<()> {
+        todo!()
+    }
+
+    /// Transitions to record reading.
+    ///
+    /// All characteristic entries must have been consumed (via
+    /// [`read_characteristic`](Self::read_characteristic) or
+    /// [`skip_to_end`](Self::skip_to_end)) before calling this
+    /// method.
+    pub fn into_record_reader(self) -> Result<RecordReader<R>> {
         todo!()
     }
 }

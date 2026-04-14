@@ -48,21 +48,19 @@ impl<R> ValueLabelReader<R> {
 impl<R: BufRead> ValueLabelReader<R> {
     // TODO: iteration over ValueLabelTable entries
 
-    /// Consumes all remaining value-label entries without processing
-    /// them, then transitions to long-string reading.
-    ///
-    /// Returns `None` if the format version does not support long
-    /// strings (pre-118).
-    pub fn read_to_end(&mut self) -> Result<()> {
+    /// Skips all remaining value-label entries without processing
+    /// them.
+    pub fn skip_to_end(&mut self) -> Result<()> {
         todo!()
     }
 
-    /// Consumes all remaining value-label entries without processing
-    /// them, then transitions to long-string reading.
+    /// Transitions to long-string reading.
     ///
-    /// Returns `None` if the format version does not support long
-    /// strings (pre-118).
-    pub fn read_long_strings(mut self) -> Result<Option<LongStringReader<R>>> {
+    /// Returns `None` if the format does not have a long-strings
+    /// section. All value-label entries must have been consumed or
+    /// skipped (via [`skip_to_end`](Self::skip_to_end)) before
+    /// calling this method.
+    pub fn into_long_string_reader(self) -> Result<Option<LongStringReader<R>>> {
         todo!()
     }
 }

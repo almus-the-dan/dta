@@ -47,18 +47,22 @@ impl<R> RecordReader<R> {
 impl<R: BufRead> RecordReader<R> {
     // TODO: iteration over rows yielding Value<'_> slices
 
-    /// Consumes all remaining data records without processing them,
-    /// then transitions to value-label reading.
+    /// Skips all remaining data records without processing them.
     ///
-    /// This is required before calling [`read_value_labels`](Self::read_value_labels)
-    /// on a non-seekable reader. It is an error to advance to the
-    /// next section without first consuming or skipping all records.
-    pub fn read_to_end(&mut self) -> Result<()> {
+    /// This is required before calling
+    /// [`into_value_label_reader`](Self::into_value_label_reader) on
+    /// a non-seekable reader. All records must be consumed or skipped
+    /// before transitioning to the next section.
+    pub fn skip_to_end(&mut self) -> Result<()> {
         todo!()
     }
 
-    /// Consumes remaining records and transitions to value-label reading.
-    pub fn read_value_labels(mut self) -> Result<ValueLabelReader<R>> {
+    /// Transitions to value-label reading.
+    ///
+    /// All data records must have been consumed or skipped (via
+    /// [`skip_to_end`](Self::skip_to_end)) before calling this
+    /// method.
+    pub fn into_value_label_reader(self) -> Result<ValueLabelReader<R>> {
         todo!()
     }
 }

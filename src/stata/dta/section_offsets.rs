@@ -18,7 +18,7 @@ impl SectionOffsets {
     ///
     /// Pass `None` for `long_strings` when the format does not have a
     /// strL section (binary formats 104–116).
-    #[inline]
+    #[must_use]
     pub fn new(
         characteristics: u64,
         data: u64,
@@ -35,21 +35,18 @@ impl SectionOffsets {
 
     /// Absolute byte offset of the characteristics section.
     #[must_use]
-    #[inline]
     pub fn characteristics(&self) -> u64 {
         self.characteristics
     }
 
     /// Absolute byte offset of the data (records) section.
     #[must_use]
-    #[inline]
     pub fn records(&self) -> u64 {
         self.records
     }
 
     /// Absolute byte offset of the value-labels section.
     #[must_use]
-    #[inline]
     pub fn value_labels(&self) -> u64 {
         self.value_labels
     }
@@ -57,7 +54,6 @@ impl SectionOffsets {
     /// Absolute byte offset of the long-strings (strL) section, or
     /// `None` if the format does not have one.
     #[must_use]
-    #[inline]
     pub fn long_strings(&self) -> Option<u64> {
         self.long_strings
     }
@@ -66,7 +62,6 @@ impl SectionOffsets {
     ///
     /// Used by the characteristic reader for binary formats, where the
     /// offset is not known until expansion fields have been consumed.
-    #[inline]
     pub fn set_records(&mut self, offset: u64) {
         self.records = offset;
     }
@@ -75,7 +70,6 @@ impl SectionOffsets {
     ///
     /// Used by the characteristic reader for binary formats, where the
     /// offset is not known until the data section size can be computed.
-    #[inline]
     pub fn set_value_labels(&mut self, offset: u64) {
         self.value_labels = offset;
     }

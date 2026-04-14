@@ -1,5 +1,7 @@
 /// Byte order (endianness) representation.
 pub mod byte_order;
+/// A single characteristic entry (key-value metadata).
+pub mod characteristic;
 /// Reads characteristics (expansion fields) from a DTA file.
 pub mod characteristic_reader;
 /// Unified error type for the DTA reader.

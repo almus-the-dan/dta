@@ -48,9 +48,9 @@ impl<R> LongStringReader<R> {
 impl<R: BufRead> LongStringReader<R> {
     // TODO: iteration over LongString<'_> entries
 
-    /// Consumes all remaining long-string entries without processing
+    /// Skips all remaining long-string entries without processing
     /// them.
-    pub fn read_to_end(&mut self) -> Result<()> {
+    pub fn skip_to_end(&mut self) -> Result<()> {
         todo!()
     }
 }
