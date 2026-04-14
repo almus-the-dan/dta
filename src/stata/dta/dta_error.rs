@@ -59,6 +59,10 @@ pub enum Field {
     ValueLabelEntry,
     /// The type field of a long string (strL) entry.
     LongStringType,
+    /// The name field of a characteristic entry.
+    CharacteristicName,
+    /// The value/contents field of a characteristic entry.
+    CharacteristicValue,
 }
 
 impl fmt::Display for Field {
@@ -75,6 +79,8 @@ impl fmt::Display for Field {
             Self::ValueLabelName => "value-label name",
             Self::ValueLabelEntry => "value-label entry",
             Self::LongStringType => "long string type",
+            Self::CharacteristicName => "characteristic name",
+            Self::CharacteristicValue => "characteristic value",
         })
     }
 }
