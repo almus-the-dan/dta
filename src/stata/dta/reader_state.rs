@@ -4,6 +4,7 @@ use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::section_offsets::SectionOffsets;
 
 #[derive(Debug)]
 pub(crate) struct ReaderState<R> {
@@ -11,6 +12,7 @@ pub(crate) struct ReaderState<R> {
     encoding: &'static Encoding,
     buffer: Vec<u8>,
     position: u64,
+    section_offsets: Option<SectionOffsets>,
 }
 
 // -- Construction and accessors ----------------------------------------------
@@ -23,6 +25,7 @@ impl<R> ReaderState<R> {
             encoding,
             buffer: Vec::new(),
             position: 0,
+            section_offsets: None,
         }
     }
 
@@ -43,6 +46,30 @@ impl<R> ReaderState<R> {
     #[must_use]
     pub fn encoding(&self) -> &'static Encoding {
         self.encoding
+    }
+
+    /// Byte offsets for each post-schema section.
+    ///
+    /// Returns `None` before [`SchemaReader::read_schema`] has
+    /// completed.
+    #[must_use]
+    pub fn section_offsets(&self) -> Option<&SectionOffsets> {
+        self.section_offsets.as_ref()
+    }
+
+    /// Mutable access to section offsets.
+    ///
+    /// Used by the characteristic reader to fill in data and
+    /// value-label offsets for binary formats. Returns `None` before
+    /// schema reading.
+    pub fn section_offsets_mut(&mut self) -> Option<&mut SectionOffsets> {
+        self.section_offsets.as_mut()
+    }
+
+    /// Stores the section offsets. Called by the schema reader after
+    /// parsing the map (XML) or computing positions (binary).
+    pub fn set_section_offsets(&mut self, offsets: SectionOffsets) {
+        self.section_offsets = Some(offsets);
     }
 }
 

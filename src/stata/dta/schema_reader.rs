@@ -7,6 +7,7 @@ use super::header::Header;
 use super::reader_state::ReaderState;
 use super::release::Release;
 use super::schema::Schema;
+use super::section_offsets::SectionOffsets;
 use super::variable::Variable;
 use super::variable_type::VariableType;
 
@@ -61,7 +62,8 @@ impl<R: BufRead> SchemaReader<R> {
         // XML formats store section offsets in a map before the
         // descriptors; binary formats have no map.
         if release.is_xml_like() {
-            self.read_map(byte_order)?;
+            let offsets = self.read_map(byte_order)?;
+            self.state.set_section_offsets(offsets);
         }
 
         let variable_types = self.read_variable_types(variable_count, release, byte_order)?;
@@ -70,6 +72,17 @@ impl<R: BufRead> SchemaReader<R> {
         let formats = self.read_formats(variable_count, release)?;
         let value_label_names = self.read_value_label_names(variable_count, release)?;
         let variable_labels = self.read_variable_labels(variable_count, release)?;
+
+        // For binary formats, characteristics start at the current
+        // position (right after the last descriptor subsection).
+        // Data and value-label offsets are not yet known — the
+        // characteristic reader computes them after consuming the
+        // expansion fields.
+        if !release.is_xml_like() {
+            let characteristics_offset = self.state.position();
+            self.state
+                .set_section_offsets(SectionOffsets::new(characteristics_offset, 0, 0, None));
+        }
 
         let variables = assemble_variables(
             variable_types,
@@ -107,15 +120,33 @@ impl<R: Read> SchemaReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: Read> SchemaReader<R> {
-    /// Reads the `<map>` section and returns the data-section offset.
-    fn read_map(&mut self, byte_order: ByteOrder) -> Result<u64> {
+    /// Reads the `<map>` section and returns offsets for each
+    /// post-schema section.
+    ///
+    /// The map contains 14 `u64` values. The indices used are:
+    ///
+    /// | Index | Section              |
+    /// |-------|----------------------|
+    /// |   8   | `<characteristics>`  |
+    /// |   9   | `<data>`             |
+    /// |  10   | `<strls>`            |
+    /// |  11   | `<value_labels>`     |
+    fn read_map(&mut self, byte_order: ByteOrder) -> Result<SectionOffsets> {
         self.expect_tag(b"<map>")?;
 
         let buffer = self.state.read_exact(14 * 8, Section::Schema)?;
+        let characteristics_offset = read_u64_at(buffer, 8, byte_order);
         let data_offset = read_u64_at(buffer, 9, byte_order);
+        let long_strings_offset = read_u64_at(buffer, 10, byte_order);
+        let value_labels_offset = read_u64_at(buffer, 11, byte_order);
 
         self.expect_tag(b"</map>")?;
-        Ok(data_offset)
+        Ok(SectionOffsets::new(
+            characteristics_offset,
+            data_offset,
+            value_labels_offset,
+            Some(long_strings_offset),
+        ))
     }
 }
 

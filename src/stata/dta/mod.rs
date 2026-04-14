@@ -27,6 +27,8 @@ pub mod release;
 pub mod schema;
 /// Reads variable definitions from a DTA file.
 pub mod schema_reader;
+/// Byte offsets for post-schema sections.
+mod section_offsets;
 /// Cell value from the data section.
 pub mod value;
 /// Named table mapping integer values to string labels.

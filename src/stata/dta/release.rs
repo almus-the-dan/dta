@@ -95,8 +95,23 @@ impl Release {
     }
 
     /// Whether the file uses XML-style section tags (format 117+).
+    ///
+    /// XML formats store a section map with absolute byte offsets for
+    /// every section, so all post-schema seek operations are available
+    /// immediately after schema reading. Binary formats require
+    /// sequential reading through expansion fields before the data and
+    /// value-label offsets are known.
     #[must_use]
-    pub(crate) fn is_xml_like(self) -> bool {
+    #[inline]
+    pub fn is_xml_like(self) -> bool {
+        self >= Self::V117
+    }
+
+    /// Whether the format supports long strings (strL) and has a
+    /// `<strls>` section (format 117+).
+    #[must_use]
+    #[inline]
+    pub fn supports_long_strings(self) -> bool {
         self >= Self::V117
     }
 

@@ -1,6 +1,7 @@
 use std::io::{BufRead, Seek};
 
-use super::dta_error::Result;
+use super::characteristic_reader::CharacteristicReader;
+use super::dta_error::{DtaError, Result, Section};
 use super::header::Header;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
@@ -20,6 +21,15 @@ pub struct LongStringReader<R> {
 }
 
 impl<R> LongStringReader<R> {
+    #[must_use]
+    pub(crate) fn new(state: ReaderState<R>, header: Header, schema: Schema) -> Self {
+        Self {
+            state,
+            header,
+            schema,
+        }
+    }
+
     /// The parsed file header.
     #[must_use]
     #[inline]
@@ -46,13 +56,72 @@ impl<R: BufRead> LongStringReader<R> {
 }
 
 impl<R: BufRead + Seek> LongStringReader<R> {
-    /// Seeks back to the data section.
-    pub fn seek_records(self) -> Result<RecordReader<R>> {
-        todo!()
+    /// Seeks to the characteristics section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the section offsets have not been
+    /// initialized or if the seek fails.
+    pub fn seek_characteristics(mut self) -> Result<CharacteristicReader<R>> {
+        let offset = self
+            .state
+            .section_offsets()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::Characteristics))?
+            .characteristics();
+        self.state.seek_to(offset, Section::Characteristics)?;
+        Ok(CharacteristicReader::new(
+            self.state,
+            self.header,
+            self.schema,
+        ))
     }
 
-    /// Seeks back to the value-label section.
-    pub fn seek_value_labels(self) -> Result<ValueLabelReader<R>> {
-        todo!()
+    /// Seeks to the data section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the section offsets have not been
+    /// initialized or if the seek fails.
+    pub fn seek_records(mut self) -> Result<RecordReader<R>> {
+        let offset = self
+            .state
+            .section_offsets()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?
+            .records();
+        self.state.seek_to(offset, Section::Records)?;
+        Ok(RecordReader::new(self.state, self.header, self.schema))
+    }
+
+    /// Seeks to the value-label section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the section offsets have not been
+    /// initialized or if the seek fails.
+    pub fn seek_value_labels(mut self) -> Result<ValueLabelReader<R>> {
+        let offset = self
+            .state
+            .section_offsets()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::ValueLabels))?
+            .value_labels();
+        self.state.seek_to(offset, Section::ValueLabels)?;
+        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+    }
+
+    /// Seeks to the start of the long-strings section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the section offsets have not been
+    /// initialized or if the seek fails.
+    pub fn seek_long_strings(mut self) -> Result<Self> {
+        let offset = self
+            .state
+            .section_offsets()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?
+            .long_strings()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?;
+        self.state.seek_to(offset, Section::LongStrings)?;
+        Ok(Self::new(self.state, self.header, self.schema))
     }
 }

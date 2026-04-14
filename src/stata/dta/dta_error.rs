@@ -7,11 +7,13 @@ pub enum Section {
     Header,
     /// Variable definitions (names, types, formats, labels).
     Schema,
+    /// Characteristics / expansion fields.
+    Characteristics,
     /// Observation data rows.
     Records,
     /// Value-label mapping tables.
     ValueLabels,
-    /// Long string (strL) entries (format 118+ only).
+    /// Long string (strL) entries (format 117+ only).
     LongStrings,
 }
 
@@ -20,6 +22,7 @@ impl fmt::Display for Section {
         f.write_str(match self {
             Self::Header => "header",
             Self::Schema => "schema",
+            Self::Characteristics => "characteristics",
             Self::Records => "records",
             Self::ValueLabels => "value labels",
             Self::LongStrings => "long strings",
@@ -300,6 +303,15 @@ impl DtaError {
     /// Creates an I/O error tagged with a section.
     pub(crate) fn io(section: Section, source: std::io::Error) -> Self {
         Self::Io { section, source }
+    }
+
+    /// Creates an error for a seek attempted before section offsets
+    /// have been initialized (i.e., before schema reading).
+    pub(crate) fn missing_section_offsets(section: Section) -> Self {
+        Self::io(
+            section,
+            std::io::Error::other("section offsets not available — schema must be read first"),
+        )
     }
 
     /// Creates a format error. Shorthand for wrapping
