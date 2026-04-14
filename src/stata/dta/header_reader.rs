@@ -400,16 +400,8 @@ mod tests {
 
         let variable_count = u16::try_from(header.variable_count()).unwrap();
         let observation_count = u32::try_from(header.observation_count()).unwrap();
-        match byte_order {
-            ByteOrder::BigEndian => {
-                buffer.extend_from_slice(&variable_count.to_be_bytes());
-                buffer.extend_from_slice(&observation_count.to_be_bytes());
-            }
-            ByteOrder::LittleEndian => {
-                buffer.extend_from_slice(&variable_count.to_le_bytes());
-                buffer.extend_from_slice(&observation_count.to_le_bytes());
-            }
-        }
+        buffer.extend_from_slice(&byte_order.write_u16(variable_count));
+        buffer.extend_from_slice(&byte_order.write_u32(observation_count));
 
         // Fixed-length label field, null-padded
         let label_bytes = header.dataset_label().as_bytes();
@@ -452,42 +444,20 @@ mod tests {
         // <K> — variable count
         buffer.extend_from_slice(b"<K>");
         if release.supports_extended_variable_count() {
-            match byte_order {
-                ByteOrder::BigEndian => {
-                    buffer.extend_from_slice(&header.variable_count().to_be_bytes())
-                }
-                ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&header.variable_count().to_le_bytes())
-                }
-            }
+            buffer.extend_from_slice(&byte_order.write_u32(header.variable_count()));
         } else {
             let variable_count = u16::try_from(header.variable_count()).unwrap();
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&variable_count.to_le_bytes()),
-            }
+            buffer.extend_from_slice(&byte_order.write_u16(variable_count));
         }
         buffer.extend_from_slice(b"</K>");
 
         // <N> — observation count
         buffer.extend_from_slice(b"<N>");
         if release.supports_extended_observation_count() {
-            match byte_order {
-                ByteOrder::BigEndian => {
-                    buffer.extend_from_slice(&header.observation_count().to_be_bytes())
-                }
-                ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&header.observation_count().to_le_bytes())
-                }
-            }
+            buffer.extend_from_slice(&byte_order.write_u64(header.observation_count()));
         } else {
             let observation_count = u32::try_from(header.observation_count()).unwrap();
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&observation_count.to_be_bytes()),
-                ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&observation_count.to_le_bytes())
-                }
-            }
+            buffer.extend_from_slice(&byte_order.write_u32(observation_count));
         }
         buffer.extend_from_slice(b"</N>");
 
@@ -497,10 +467,7 @@ mod tests {
         match release.data_label_len_width() {
             2 => {
                 let len = u16::try_from(label_bytes.len()).unwrap();
-                match byte_order {
-                    ByteOrder::BigEndian => buffer.extend_from_slice(&len.to_be_bytes()),
-                    ByteOrder::LittleEndian => buffer.extend_from_slice(&len.to_le_bytes()),
-                }
+                buffer.extend_from_slice(&byte_order.write_u16(len));
             }
             1 => buffer.push(u8::try_from(label_bytes.len()).unwrap()),
             _ => {}

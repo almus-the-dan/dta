@@ -8,7 +8,7 @@ use super::reader_state::ReaderState;
 use super::release::Release;
 use super::schema::Schema;
 use super::section_offsets::SectionOffsets;
-use super::variable::Variable;
+use super::variable::{Variable, VariableBuilder};
 use super::variable_type::VariableType;
 
 /// Reads variable definitions from a DTA file.
@@ -177,10 +177,7 @@ impl<R: Read> SchemaReader<R> {
             } else {
                 let offset = index * 2;
                 let bytes = [buffer[offset], buffer[offset + 1]];
-                match byte_order {
-                    ByteOrder::BigEndian => u16::from_be_bytes(bytes),
-                    ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
-                }
+                byte_order.read_u16(bytes)
             };
             let position = offset_position(section_start, index * entry_len)?;
             types.push(parse_type_code(code, release, position)?);
@@ -226,10 +223,7 @@ impl<R: Read> SchemaReader<R> {
             let offset = index * entry_len;
             let index = if entry_len == 2 {
                 let bytes = [buffer[offset], buffer[offset + 1]];
-                u32::from(match byte_order {
-                    ByteOrder::BigEndian => u16::from_be_bytes(bytes),
-                    ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
-                })
+                u32::from(byte_order.read_u16(bytes))
             } else {
                 let bytes = [
                     buffer[offset],
@@ -237,10 +231,7 @@ impl<R: Read> SchemaReader<R> {
                     buffer[offset + 2],
                     buffer[offset + 3],
                 ];
-                match byte_order {
-                    ByteOrder::BigEndian => u32::from_be_bytes(bytes),
-                    ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
-                }
+                byte_order.read_u32(bytes)
             };
 
             if index == 0 {
@@ -448,10 +439,7 @@ fn read_u64_at(buffer: &[u8], index: usize, byte_order: ByteOrder) -> u64 {
         buffer[offset + 6],
         buffer[offset + 7],
     ];
-    match byte_order {
-        ByteOrder::BigEndian => u64::from_be_bytes(bytes),
-        ByteOrder::LittleEndian => u64::from_le_bytes(bytes),
-    }
+    byte_order.read_u64(bytes)
 }
 
 /// Zips the per-variable arrays into a single [`Variable`] vec.
@@ -461,7 +449,7 @@ fn assemble_variables(
     formats: Vec<String>,
     value_label_names: Vec<String>,
     labels: Vec<String>,
-) -> Vec<Variable> {
+) -> Vec<VariableBuilder> {
     let count = types.len();
     let mut types = types.into_iter();
     let mut names = names.into_iter();
@@ -483,8 +471,7 @@ fn assemble_variables(
         let variable = Variable::builder(variable_type, variable_name)
             .format(format)
             .value_label_name(label_name)
-            .label(label_value)
-            .build();
+            .label(label_value);
         variables.push(variable);
     }
     variables
@@ -763,14 +750,8 @@ mod tests {
             0x00, // padding
         ];
 
-        match byte_order {
-            ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count.to_be_bytes()),
-            ByteOrder::LittleEndian => buffer.extend_from_slice(&variable_count.to_le_bytes()),
-        }
-        match byte_order {
-            ByteOrder::BigEndian => buffer.extend_from_slice(&0u32.to_be_bytes()),
-            ByteOrder::LittleEndian => buffer.extend_from_slice(&0u32.to_le_bytes()),
-        }
+        buffer.extend_from_slice(&byte_order.write_u16(variable_count));
+        buffer.extend_from_slice(&byte_order.write_u32(0));
         write_fixed(&mut buffer, "", release.dataset_label_len());
         if release.has_timestamp() {
             write_fixed(&mut buffer, "", release.timestamp_len());
@@ -792,10 +773,7 @@ mod tests {
         for index in 0..=usize::from(variable_count) {
             let index: u32 = sort_order.get(index).map_or(0, |idx| idx + 1);
             let index = u16::try_from(index).unwrap();
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&index.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&index.to_le_bytes()),
-            }
+            buffer.extend_from_slice(&byte_order.write_u16(index));
             // Pad to entry_len if it's 4 bytes (only v119, which is XML)
             if sort_entry_len == 4 {
                 buffer.extend_from_slice(&[0, 0]);
@@ -849,43 +827,24 @@ mod tests {
         buffer.extend_from_slice(b"<K>");
         if release.supports_extended_variable_count() {
             let variable_count_u32 = u32::try_from(variable_count).unwrap();
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count_u32.to_be_bytes()),
-                ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&variable_count_u32.to_le_bytes());
-                }
-            }
+            buffer.extend_from_slice(&byte_order.write_u32(variable_count_u32));
         } else {
             let variable_count_u16 = u16::try_from(variable_count).unwrap();
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&variable_count_u16.to_be_bytes()),
-                ByteOrder::LittleEndian => {
-                    buffer.extend_from_slice(&variable_count_u16.to_le_bytes());
-                }
-            }
+            buffer.extend_from_slice(&byte_order.write_u16(variable_count_u16));
         }
         buffer.extend_from_slice(b"</K>");
 
         buffer.extend_from_slice(b"<N>");
         if release.supports_extended_observation_count() {
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&0u64.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&0u64.to_le_bytes()),
-            }
+            buffer.extend_from_slice(&byte_order.write_u64(0));
         } else {
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&0u32.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&0u32.to_le_bytes()),
-            }
+            buffer.extend_from_slice(&byte_order.write_u32(0));
         }
         buffer.extend_from_slice(b"</N>");
 
         buffer.extend_from_slice(b"<label>");
         match release.data_label_len_width() {
-            2 => match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&0u16.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&0u16.to_le_bytes()),
-            },
+            2 => buffer.extend_from_slice(&byte_order.write_u16(0)),
             1 => buffer.push(0),
             _ => {}
         }
@@ -917,10 +876,7 @@ mod tests {
         buffer.extend_from_slice(b"<variable_types>");
         for variable in variables {
             let code = type_to_code(variable.variable_type, release);
-            match byte_order {
-                ByteOrder::BigEndian => buffer.extend_from_slice(&code.to_be_bytes()),
-                ByteOrder::LittleEndian => buffer.extend_from_slice(&code.to_le_bytes()),
-            }
+            buffer.extend_from_slice(&byte_order.write_u16(code));
         }
         buffer.extend_from_slice(b"</variable_types>");
 
@@ -938,15 +894,9 @@ mod tests {
             let index: u32 = sort_order.get(index).map_or(0, |idx| idx + 1);
             if sort_entry_len == 2 {
                 let index_u16 = u16::try_from(index).unwrap();
-                match byte_order {
-                    ByteOrder::BigEndian => buffer.extend_from_slice(&index_u16.to_be_bytes()),
-                    ByteOrder::LittleEndian => buffer.extend_from_slice(&index_u16.to_le_bytes()),
-                }
+                buffer.extend_from_slice(&byte_order.write_u16(index_u16));
             } else {
-                match byte_order {
-                    ByteOrder::BigEndian => buffer.extend_from_slice(&index.to_be_bytes()),
-                    ByteOrder::LittleEndian => buffer.extend_from_slice(&index.to_le_bytes()),
-                }
+                buffer.extend_from_slice(&byte_order.write_u32(index));
             }
         }
         buffer.extend_from_slice(b"</sortlist>");
@@ -982,10 +932,7 @@ mod tests {
 
         // Patch data_offset at map index 9
         let data_offset = u64::try_from(buffer.len()).unwrap();
-        let offset_bytes = match byte_order {
-            ByteOrder::BigEndian => data_offset.to_be_bytes(),
-            ByteOrder::LittleEndian => data_offset.to_le_bytes(),
-        };
+        let offset_bytes = byte_order.write_u64(data_offset);
         buffer[map_data_start + 9 * 8..map_data_start + 10 * 8].copy_from_slice(&offset_bytes);
     }
 
@@ -1482,9 +1429,9 @@ mod tests {
         use crate::stata::dta::schema::Schema;
 
         let schema = Schema::builder()
-            .add_variable(Variable::builder(VariableType::Byte, "a").build())
-            .add_variable(Variable::builder(VariableType::Int, "b").build())
-            .add_variable(Variable::builder(VariableType::Double, "c").build())
+            .add_variable(Variable::builder(VariableType::Byte, "a"))
+            .add_variable(Variable::builder(VariableType::Int, "b"))
+            .add_variable(Variable::builder(VariableType::Double, "c"))
             .sort_order(vec![2, 0])
             .build()
             .unwrap();
@@ -1499,8 +1446,8 @@ mod tests {
         use crate::stata::dta::schema::Schema;
 
         let error = Schema::builder()
-            .add_variable(Variable::builder(VariableType::Byte, "a").build())
-            .add_variable(Variable::builder(VariableType::Byte, "b").build())
+            .add_variable(Variable::builder(VariableType::Byte, "a"))
+            .add_variable(Variable::builder(VariableType::Byte, "b"))
             .sort_order(vec![0, 5])
             .build()
             .unwrap_err();
@@ -1519,7 +1466,7 @@ mod tests {
         use crate::stata::dta::schema::Schema;
 
         let schema = Schema::builder()
-            .add_variable(Variable::builder(VariableType::Byte, "x").build())
+            .add_variable(Variable::builder(VariableType::Byte, "x"))
             .build()
             .unwrap();
 

@@ -101,31 +101,19 @@ impl<R: Read> ReaderState<R> {
 
     pub fn read_u16(&mut self, byte_order: ByteOrder, section: Section) -> Result<u16> {
         let buffer = self.read_exact(2, section)?;
-        let bytes = [buffer[0], buffer[1]];
-        Ok(match byte_order {
-            ByteOrder::BigEndian => u16::from_be_bytes(bytes),
-            ByteOrder::LittleEndian => u16::from_le_bytes(bytes),
-        })
+        Ok(byte_order.read_u16([buffer[0], buffer[1]]))
     }
 
     pub fn read_u32(&mut self, byte_order: ByteOrder, section: Section) -> Result<u32> {
         let buffer = self.read_exact(4, section)?;
-        let bytes = [buffer[0], buffer[1], buffer[2], buffer[3]];
-        Ok(match byte_order {
-            ByteOrder::BigEndian => u32::from_be_bytes(bytes),
-            ByteOrder::LittleEndian => u32::from_le_bytes(bytes),
-        })
+        Ok(byte_order.read_u32([buffer[0], buffer[1], buffer[2], buffer[3]]))
     }
 
     pub fn read_u64(&mut self, byte_order: ByteOrder, section: Section) -> Result<u64> {
         let buffer = self.read_exact(8, section)?;
-        let bytes = [
+        Ok(byte_order.read_u64([
             buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
-        ];
-        Ok(match byte_order {
-            ByteOrder::BigEndian => u64::from_be_bytes(bytes),
-            ByteOrder::LittleEndian => u64::from_le_bytes(bytes),
-        })
+        ]))
     }
 
     /// Reads and validates an exact byte sequence. Returns the given

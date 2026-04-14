@@ -1,5 +1,5 @@
 use super::dta_error::{DtaError, Result};
-use super::variable::Variable;
+use super::variable::{Variable, VariableBuilder};
 
 /// Variable definitions and layout information from a DTA file.
 ///
@@ -56,9 +56,13 @@ impl Schema {
 /// [`add_variable`](Self::add_variable) or [`variables`](Self::variables),
 /// optionally set a [`sort_order`](Self::sort_order), then call
 /// [`build`](Self::build).
+///
+/// Variable byte offsets are computed automatically during
+/// [`build`](Self::build) — callers provide [`VariableBuilder`]s
+/// rather than fully constructed [`Variable`]s.
 #[derive(Debug, Clone)]
 pub struct SchemaBuilder {
-    variables: Vec<Variable>,
+    variables: Vec<VariableBuilder>,
     sort_order: Vec<u32>,
 }
 
@@ -66,7 +70,7 @@ impl SchemaBuilder {
     /// Appends a single variable.
     #[must_use]
     #[inline]
-    pub fn add_variable(mut self, variable: Variable) -> Self {
+    pub fn add_variable(mut self, variable: VariableBuilder) -> Self {
         self.variables.push(variable);
         self
     }
@@ -74,7 +78,7 @@ impl SchemaBuilder {
     /// Replaces all variables.
     #[must_use]
     #[inline]
-    pub fn variables(mut self, variables: Vec<Variable>) -> Self {
+    pub fn variables(mut self, variables: Vec<VariableBuilder>) -> Self {
         self.variables = variables;
         self
     }
@@ -117,13 +121,19 @@ impl SchemaBuilder {
                 });
             }
         }
-        let row_len = self
+        let mut row_len = 0usize;
+        let variables = self
             .variables
-            .iter()
-            .map(|v| v.variable_type().width())
-            .sum();
+            .into_iter()
+            .map(|builder| {
+                let width = builder.variable_type().width();
+                let variable = builder.offset(row_len).build();
+                row_len += width;
+                variable
+            })
+            .collect();
         Ok(Schema {
-            variables: self.variables,
+            variables,
             sort_order: self.sort_order,
             row_len,
         })

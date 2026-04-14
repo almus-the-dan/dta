@@ -3,8 +3,10 @@ use std::io::{BufRead, Seek};
 use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, Result, Section};
 use super::header::Header;
+use super::lazy_record::LazyRecord;
 use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
+use super::record::Record;
 use super::schema::Schema;
 use super::value_label_reader::ValueLabelReader;
 
@@ -45,7 +47,36 @@ impl<R> RecordReader<R> {
 }
 
 impl<R: BufRead> RecordReader<R> {
-    // TODO: iteration over rows yielding Value<'_> slices
+    /// Reads the next observation, eagerly parsing all values.
+    ///
+    /// Returns `None` when all observations have been consumed.
+    /// The returned [`Record`] borrows string data from the
+    /// reader's internal buffer, so it must be dropped before the
+    /// next call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] when the row bytes violate the DTA
+    /// format specification.
+    pub fn read_record(&mut self) -> Result<Option<Record<'_>>> {
+        todo!()
+    }
+
+    /// Reads the next observation without parsing individual values.
+    ///
+    /// Returns `None` when all observations have been consumed.
+    /// The returned [`LazyRecord`] holds the raw row bytes and
+    /// decodes values on demand via
+    /// [`LazyRecord::value`]. This avoids parsing columns that
+    /// are never accessed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures.
+    pub fn read_lazy_record(&mut self) -> Result<Option<LazyRecord<'_>>> {
+        todo!()
+    }
 
     /// Skips all remaining data records without processing them.
     ///

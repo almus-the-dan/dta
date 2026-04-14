@@ -9,6 +9,7 @@ pub struct Variable {
     format: String,
     value_label_name: String,
     label: String,
+    offset: usize,
 }
 
 impl Variable {
@@ -23,6 +24,7 @@ impl Variable {
             format: String::new(),
             value_label_name: String::new(),
             label: String::new(),
+            offset: 0,
         }
     }
 
@@ -62,6 +64,15 @@ impl Variable {
     pub fn label(&self) -> &str {
         &self.label
     }
+
+    /// Byte offset of this variable within a data row.
+    ///
+    /// Computed during schema building as the sum of widths of all
+    /// preceding variables.
+    #[must_use]
+    pub(crate) fn offset(&self) -> usize {
+        self.offset
+    }
 }
 
 /// Builder for [`Variable`].
@@ -75,9 +86,25 @@ pub struct VariableBuilder {
     format: String,
     value_label_name: String,
     label: String,
+    offset: usize,
 }
 
 impl VariableBuilder {
+    /// The storage type of this variable.
+    #[must_use]
+    #[inline]
+    pub(crate) fn variable_type(&self) -> VariableType {
+        self.variable_type
+    }
+
+    /// Sets the byte offset of this variable within a data row.
+    #[must_use]
+    #[inline]
+    pub(crate) fn offset(mut self, offset: usize) -> Self {
+        self.offset = offset;
+        self
+    }
+
     /// Sets the display format string.
     #[must_use]
     #[inline]
@@ -112,6 +139,7 @@ impl VariableBuilder {
             format: self.format,
             value_label_name: self.value_label_name,
             label: self.label,
+            offset: self.offset,
         }
     }
 }

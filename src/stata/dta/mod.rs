@@ -14,6 +14,8 @@ pub mod dta_reader_options;
 pub mod header;
 /// Entry point for reading a DTA file.
 pub mod header_reader;
+/// A lazily parsed observation row.
+pub mod lazy_record;
 /// Decoded long string (strL) entry.
 pub mod long_string;
 /// Reads long string (strL) entries (format 118+ only).
@@ -21,6 +23,8 @@ pub mod long_string_reader;
 /// Unresolved reference to a long string in the strL section.
 pub mod long_string_ref;
 mod reader_state;
+/// An eagerly parsed observation row.
+pub mod record;
 /// Reads observation records from the data section.
 pub mod record_reader;
 /// DTA format version (release number).

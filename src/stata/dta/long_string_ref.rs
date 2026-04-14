@@ -11,6 +11,14 @@ pub struct LongStringRef {
 }
 
 impl LongStringRef {
+    #[must_use]
+    pub(crate) fn new(variable: u32, observation: u64) -> Self {
+        Self {
+            variable,
+            observation,
+        }
+    }
+
     /// One-based variable index.
     #[must_use]
     #[inline]
