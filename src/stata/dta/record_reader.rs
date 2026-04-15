@@ -1,33 +1,42 @@
 use std::io::{BufRead, Seek};
 
 use super::characteristic_reader::CharacteristicReader;
-use super::dta_error::{DtaError, Result, Section};
+use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::lazy_record::LazyRecord;
 use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
 use super::record::Record;
 use super::schema::Schema;
+use super::value::Value;
 use super::value_label_reader::ValueLabelReader;
 
 /// Reads observation records from the data section of a DTA file.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous
-/// phases. Yields rows of [`Value`](super::value::Value) via
+/// phases. Yields rows of [`Value`](Value) via
 /// iteration, then transitions to value-label reading.
 #[derive(Debug)]
 pub struct RecordReader<R> {
     state: ReaderState<R>,
     header: Header,
     schema: Schema,
+    remaining_observations: u64,
+    opened: bool,
+    completed: bool,
 }
 
 impl<R> RecordReader<R> {
+    #[must_use]
     pub(crate) fn new(state: ReaderState<R>, header: Header, schema: Schema) -> Self {
+        let remaining_observations = header.observation_count();
         Self {
             state,
             header,
             schema,
+            remaining_observations,
+            opened: false,
+            completed: false,
         }
     }
 
@@ -46,6 +55,10 @@ impl<R> RecordReader<R> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sequential reading (BufRead)
+// ---------------------------------------------------------------------------
+
 impl<R: BufRead> RecordReader<R> {
     /// Reads the next observation, eagerly parsing all values.
     ///
@@ -60,7 +73,32 @@ impl<R: BufRead> RecordReader<R> {
     /// [`DtaError::Format`] when the row bytes violate the DTA
     /// format specification.
     pub fn read_record(&mut self) -> Result<Option<Record<'_>>> {
-        todo!()
+        if !self.read_next_row()? {
+            return Ok(None);
+        }
+
+        let byte_order = self.header.byte_order();
+        let release = self.header.release();
+        let encoding = self.state.encoding();
+        let row_bytes = self.state.buffer();
+        let variables = self.schema.variables();
+
+        let mut values = Vec::with_capacity(variables.len());
+        for variable in variables {
+            let offset = variable.offset();
+            let width = variable.variable_type().width();
+            let column_bytes = &row_bytes[offset..offset + width];
+            let value = Value::from_column_bytes(
+                column_bytes,
+                variable.variable_type(),
+                byte_order,
+                release,
+                encoding,
+            )?;
+            values.push(value);
+        }
+
+        Ok(Some(Record::new(values)))
     }
 
     /// Reads the next observation without parsing individual values.
@@ -75,7 +113,17 @@ impl<R: BufRead> RecordReader<R> {
     ///
     /// Returns [`DtaError::Io`] on read failures.
     pub fn read_lazy_record(&mut self) -> Result<Option<LazyRecord<'_>>> {
-        todo!()
+        if !self.read_next_row()? {
+            return Ok(None);
+        }
+
+        Ok(Some(LazyRecord::new(
+            self.state.buffer(),
+            self.schema.variables(),
+            self.header.release(),
+            self.header.byte_order(),
+            self.state.encoding(),
+        )))
     }
 
     /// Skips all remaining data records without processing them.
@@ -84,8 +132,28 @@ impl<R: BufRead> RecordReader<R> {
     /// [`into_value_label_reader`](Self::into_value_label_reader) on
     /// a non-seekable reader. All records must be consumed or skipped
     /// before transitioning to the next section.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] if the closing `</data>` tag (XML
+    /// formats) is missing or malformed.
     pub fn skip_to_end(&mut self) -> Result<()> {
-        todo!()
+        if self.completed {
+            return Ok(());
+        }
+
+        self.read_opening_tag()?;
+
+        let row_len = self.schema.row_len();
+        while self.remaining_observations > 0 {
+            self.state.skip(row_len, Section::Records)?;
+            self.remaining_observations -= 1;
+        }
+
+        self.read_closing_tag()?;
+        self.completed = true;
+        Ok(())
     }
 
     /// Transitions to value-label reading.
@@ -93,10 +161,81 @@ impl<R: BufRead> RecordReader<R> {
     /// All data records must have been consumed or skipped (via
     /// [`skip_to_end`](Self::skip_to_end)) before calling this
     /// method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the data section has not been
+    /// fully consumed.
     pub fn into_value_label_reader(self) -> Result<ValueLabelReader<R>> {
-        todo!()
+        if !self.completed {
+            return Err(DtaError::io(
+                Section::Records,
+                std::io::Error::other(
+                    "data section must be fully consumed \
+                     before transitioning to value-label reading",
+                ),
+            ));
+        }
+        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+impl<R: BufRead> RecordReader<R> {
+    /// Reads the next row's bytes into the internal buffer.
+    ///
+    /// Returns `true` if a row was read, `false` if all observations
+    /// have been consumed (also handles closing tag and sets
+    /// `completed`).
+    fn read_next_row(&mut self) -> Result<bool> {
+        if self.completed {
+            return Ok(false);
+        }
+
+        self.read_opening_tag()?;
+
+        if self.remaining_observations == 0 {
+            self.read_closing_tag()?;
+            self.completed = true;
+            return Ok(false);
+        }
+
+        let row_len = self.schema.row_len();
+        self.state.read_exact(row_len, Section::Records)?;
+        self.remaining_observations -= 1;
+
+        Ok(true)
+    }
+
+    /// Reads the `<data>` opening tag for XML formats on first access.
+    fn read_opening_tag(&mut self) -> Result<()> {
+        if self.opened {
+            return Ok(());
+        }
+        self.opened = true;
+        if self.header.release().is_xml_like() {
+            self.state
+                .expect_bytes(b"<data>", Section::Records, FormatErrorKind::InvalidMagic)?;
+        }
+        Ok(())
+    }
+
+    /// Reads the `</data>` closing tag for XML formats.
+    fn read_closing_tag(&mut self) -> Result<()> {
+        if self.header.release().is_xml_like() {
+            self.state
+                .expect_bytes(b"</data>", Section::Records, FormatErrorKind::InvalidMagic)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seek-based navigation (BufRead + Seek)
+// ---------------------------------------------------------------------------
 
 impl<R: BufRead + Seek> RecordReader<R> {
     /// Seeks to the characteristics section.

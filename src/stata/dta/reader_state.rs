@@ -48,6 +48,13 @@ impl<R> ReaderState<R> {
         self.encoding
     }
 
+    /// The internal buffer, filled by the most recent
+    /// [`read_exact`](Self::read_exact) call.
+    #[must_use]
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
     /// Byte offsets for each post-schema section.
     ///
     /// Returns `None` before [`SchemaReader::read_schema`] has
