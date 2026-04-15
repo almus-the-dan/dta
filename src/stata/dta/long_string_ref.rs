@@ -4,6 +4,12 @@
 /// `(variable, observation)` pair that points into the long string
 /// section. These references are unresolved until the long string
 /// section is read.
+///
+/// The `observation` component is the one-based index of the first
+/// observation where a given string value appeared. Together with
+/// `variable`, it forms a unique key for looking up the string
+/// content in the strL section — identical strings that first appear
+/// in the same cell share the same `(variable, observation)` pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LongStringRef {
     variable: u32,
@@ -26,7 +32,9 @@ impl LongStringRef {
         self.variable
     }
 
-    /// One-based observation index.
+    /// One-based index of the first observation where this string content
+    /// appeared. Acts as part of the `(variable, observation)` lookup key
+    /// into the strL section, not necessarily the current row.
     #[must_use]
     #[inline]
     pub fn observation(&self) -> u64 {

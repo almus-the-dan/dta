@@ -2,9 +2,11 @@ use std::borrow::Cow;
 
 /// A decoded long string (strL) entry from the DTA file.
 ///
-/// Each long string is associated with a specific variable and
-/// observation, matching the [`LongStringRef`](super::long_string_ref::LongStringRef)
-/// encountered in the data section.
+/// Each long string is keyed by a `(variable, observation)` pair,
+/// matching the [`LongStringRef`](super::long_string_ref::LongStringRef)
+/// encountered in the data section. The `observation` component is the
+/// one-based index of the first observation where the string content
+/// appeared, serving as a deduplication key rather than a row address.
 ///
 /// The string value borrows from the reader's buffer when possible
 /// (e.g., when the source is already valid UTF-8) and allocates only
@@ -24,7 +26,9 @@ impl LongString<'_> {
         self.variable
     }
 
-    /// One-based observation index.
+    /// One-based index of the first observation where this string content
+    /// appeared. Acts as part of the `(variable, observation)` lookup key,
+    /// not necessarily the current row.
     #[must_use]
     #[inline]
     pub fn observation(&self) -> u64 {
