@@ -277,6 +277,25 @@ impl Release {
             0
         }
     }
+
+    /// Whether the format uses the old (pre-105) value label layout.
+    ///
+    /// The old layout stores fixed-width 8-byte labels indexed by
+    /// position. Format 105+ uses a more flexible layout with
+    /// explicit value/offset arrays.
+    #[must_use]
+    pub(crate) fn has_old_value_labels(self) -> bool {
+        self < Self::V105
+    }
+
+    /// Padding bytes after the label name field in a value-label
+    /// table entry.
+    ///
+    /// Returns 2 for format 104 and 3 for 105+.
+    #[must_use]
+    pub(crate) fn value_label_table_padding_len(self) -> usize {
+        if self < Self::V105 { 2 } else { 3 }
+    }
 }
 
 #[cfg(test)]

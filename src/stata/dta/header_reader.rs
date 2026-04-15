@@ -25,6 +25,7 @@ impl<R> HeaderReader<R> {
     /// Creates a header reader. The encoding override, if provided,
     /// will be used regardless of format version; otherwise the
     /// encoding is determined from the release number.
+    #[must_use]
     pub(crate) fn new(reader: R, encoding: Option<&'static Encoding>) -> Self {
         // The initial encoding is a placeholder — it is replaced once
         // the release number is known (or kept if an override was given).

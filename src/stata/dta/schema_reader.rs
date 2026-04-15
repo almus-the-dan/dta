@@ -23,6 +23,7 @@ pub struct SchemaReader<R> {
 }
 
 impl<R> SchemaReader<R> {
+    #[must_use]
     pub(crate) fn new(state: ReaderState<R>, header: Header) -> Self {
         Self { state, header }
     }

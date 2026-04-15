@@ -50,6 +50,11 @@ impl<R: BufRead> LongStringReader<R> {
 
     /// Skips all remaining long-string entries without processing
     /// them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures.
     pub fn skip_to_end(&mut self) -> Result<()> {
         todo!()
     }
