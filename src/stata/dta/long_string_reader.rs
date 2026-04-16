@@ -306,18 +306,23 @@ impl<R: BufRead + Seek> LongStringReader<R> {
 
     /// Seeks to the start of the long-strings section.
     ///
+    /// For formats that do not support long strings (pre-117),
+    /// no seek is performed and the reader remains immediately
+    /// completed.
+    ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
     pub fn seek_long_strings(mut self) -> Result<Self> {
-        let offset = self
+        let long_strings_offset = self
             .state
             .section_offsets()
             .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?
-            .long_strings()
-            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?;
-        self.state.seek_to(offset, Section::LongStrings)?;
+            .long_strings();
+        if let Some(offset) = long_strings_offset {
+            self.state.seek_to(offset, Section::LongStrings)?;
+        }
         Ok(Self::new(self.state, self.header, self.schema))
     }
 }

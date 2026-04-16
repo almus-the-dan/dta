@@ -476,35 +476,23 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
 
     /// Seeks to the long-string section.
     ///
-    /// Returns `None` if the format does not have a long-string
-    /// section. Because this method consumes `self`, check
-    /// [`Release::supports_long_strings`](super::release::Release::supports_long_strings) beforehand to avoid losing
-    /// access to the reader.
-    ///
-    /// For binary formats (where [`Release::is_xml_like`](super::release::Release::is_xml_like) returns
-    /// `false`), the long-strings section does not exist, so this
-    /// always returns `Ok(None)`.
+    /// For formats that do not support long strings (pre-117),
+    /// the returned reader immediately yields `None` from
+    /// [`read_long_string`](LongStringReader::read_long_string).
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
-    pub fn seek_long_strings(mut self) -> Result<Option<LongStringReader<R>>> {
+    pub fn seek_long_strings(mut self) -> Result<LongStringReader<R>> {
         let long_strings_offset = self
             .state
             .section_offsets()
             .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?
             .long_strings();
-        match long_strings_offset {
-            Some(offset) => {
-                self.state.seek_to(offset, Section::LongStrings)?;
-                Ok(Some(LongStringReader::new(
-                    self.state,
-                    self.header,
-                    self.schema,
-                )))
-            }
-            None => Ok(None),
+        if let Some(offset) = long_strings_offset {
+            self.state.seek_to(offset, Section::LongStrings)?;
         }
+        Ok(LongStringReader::new(self.state, self.header, self.schema))
     }
 }
