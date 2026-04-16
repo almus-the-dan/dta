@@ -490,7 +490,6 @@ mod tests {
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_error::DtaError;
     use crate::stata::dta::dta_reader::DtaReader;
-    use crate::stata::dta::dta_reader_options::DtaReaderOptions;
     use crate::stata::dta::release::Release;
 
     // -- parse_type_code unit tests ------------------------------------------
@@ -954,9 +953,8 @@ mod tests {
 
     /// Parses a schema from serialized bytes using default options.
     fn read_schema(data: Vec<u8>) -> Schema {
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        DtaReader::from_reader(cursor, &options)
+        DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap()
             .read_schema()
@@ -1511,9 +1509,8 @@ mod tests {
         let variables = [variable];
         // Sort order index 5 is out of bounds for 1 variable
         let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[5]);
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap()
             .read_schema()

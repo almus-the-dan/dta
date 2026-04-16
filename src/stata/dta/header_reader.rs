@@ -12,7 +12,8 @@ use crate::stata::stata_timestamp::StataTimestamp;
 
 /// Entry point for reading a DTA file.
 ///
-/// Created via [`DtaReader::new`](super::dta_reader::DtaReader::from_reader),
+/// Created via [`DtaReader::from_reader`](super::dta_reader::DtaReader::from_reader)
+/// or [`DtaReader::from_file`](super::dta_reader::DtaReader::from_file),
 /// then call [`read_header`](Self::read_header) to parse the file header
 /// and advance to schema reading.
 #[derive(Debug)]
@@ -360,7 +361,6 @@ mod tests {
 
     use super::*;
     use crate::stata::dta::dta_reader::DtaReader;
-    use crate::stata::dta::dta_reader_options::DtaReaderOptions;
     use crate::stata::dta::release::Release;
 
     // -- ascii_digits_to_u8 --------------------------------------------------
@@ -490,9 +490,8 @@ mod tests {
 
     /// Parses a header from serialized bytes using default options.
     fn read_back(data: Vec<u8>) -> Header {
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        DtaReader::from_reader(cursor, &options)
+        DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap()
             .header()
@@ -582,9 +581,8 @@ mod tests {
     fn binary_unsupported_release() {
         // Hand-craft bytes with an unsupported release number
         let data = vec![103, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap_err();
         assert!(matches!(
@@ -597,9 +595,8 @@ mod tests {
     fn binary_invalid_byte_order() {
         // Hand-craft bytes with an invalid byte-order code
         let data = vec![114, 0x00, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap_err();
         assert!(matches!(
@@ -614,11 +611,9 @@ mod tests {
             .variable_count(1)
             .dataset_label("test")
             .build();
-        let cursor = Cursor::new(serialize_binary(&expected));
-        let options = DtaReaderOptions::builder()
+        let schema = DtaReader::new()
             .encoding(encoding_rs::UTF_8)
-            .build();
-        let schema = DtaReader::from_reader(cursor, &options)
+            .from_reader(Cursor::new(serialize_binary(&expected)))
             .read_header()
             .unwrap();
         assert_eq!(schema.header().dataset_label(), "test");
@@ -705,10 +700,8 @@ mod tests {
 
     #[test]
     fn xml_invalid_magic() {
-        let data = b"<not_dta>garbage";
-        let cursor = Cursor::new(data.to_vec());
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(b"<not_dta>garbage".to_vec()))
             .read_header()
             .unwrap_err();
         assert!(matches!(
@@ -723,9 +716,8 @@ mod tests {
         data.extend_from_slice(b"<stata_dta><header>");
         data.extend_from_slice(b"<release>117</release>");
         data.extend_from_slice(b"<byteorder>XYZ</byteorder>");
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(data))
             .read_header()
             .unwrap_err();
         assert!(matches!(
@@ -737,10 +729,8 @@ mod tests {
     #[test]
     fn truncated_binary_header() {
         // Only 3 bytes — not enough for even the basic header struct
-        let data = vec![114, 0x02, 0x01];
-        let cursor = Cursor::new(data);
-        let options = DtaReaderOptions::default();
-        let error = DtaReader::from_reader(cursor, &options)
+        let error = DtaReader::default()
+            .from_reader(Cursor::new(vec![114, 0x02, 0x01]))
             .read_header()
             .unwrap_err();
         assert!(matches!(error, DtaError::Io { .. }));

@@ -1,27 +1,84 @@
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
 
-use super::header_reader::HeaderReader;
-use crate::stata::dta::dta_reader_options::DtaReaderOptions;
+use encoding_rs::Encoding;
 
-/// Top-level entry point for reading a DTA file.
-#[derive(Debug)]
-pub struct DtaReader;
+use crate::stata::dta::dta_error::{DtaError, Result, Section};
+use crate::stata::dta::header_reader::HeaderReader;
+
+/// Builder for configuring and opening a DTA file reader.
+///
+/// Set options with chained methods, then call a terminal method
+/// ([`from_path`](Self::from_path), [`from_file`](Self::from_file),
+/// or [`from_reader`](Self::from_reader)) to begin reading.
+///
+/// # Examples
+///
+/// ```no_run
+/// use dta::stata::dta::dta_reader::DtaReader;
+///
+/// let header_reader = DtaReader::default()
+///     .from_path("data.dta")
+///     .unwrap();
+/// ```
+#[derive(Debug, Clone)]
+pub struct DtaReader {
+    encoding: Option<&'static Encoding>,
+}
 
 impl DtaReader {
-    /// Begins reading a DTA file from a [`File`], wrapping it in a
-    /// [`BufReader`] automatically.
+    /// Creates a new builder with default values.
     #[must_use]
     #[inline]
-    pub fn from_file(file: File, options: &DtaReaderOptions) -> HeaderReader<BufReader<File>> {
-        Self::from_reader(BufReader::new(file), options)
+    pub fn new() -> Self {
+        Self { encoding: None }
     }
 
-    /// Begins reading a DTA file, returning a [`HeaderReader`] for
-    /// the first phase of parsing.
+    /// Sets an explicit encoding override, used regardless of format
+    /// version.
     #[must_use]
     #[inline]
-    pub fn from_reader<R>(reader: R, options: &DtaReaderOptions) -> HeaderReader<R> {
-        HeaderReader::new(reader, options.encoding())
+    pub fn encoding(mut self, encoding: &'static Encoding) -> Self {
+        self.encoding = Some(encoding);
+        self
+    }
+
+    /// Opens the file at `path` and begins reading it as a DTA file,
+    /// wrapping it in a [`BufReader`] automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the file cannot be opened.
+    //noinspection RsSelfConvention
+    #[inline]
+    pub fn from_path(self, path: impl AsRef<Path>) -> Result<HeaderReader<BufReader<File>>> {
+        let file = File::open(path).map_err(|e| DtaError::io(Section::Header, e))?;
+        Ok(self.from_file(file))
+    }
+
+    /// Begins reading a DTA file from a [`File`], wrapping it in a
+    /// [`BufReader`] automatically.
+    //noinspection RsSelfConvention
+    #[must_use]
+    #[inline]
+    pub fn from_file(self, file: File) -> HeaderReader<BufReader<File>> {
+        self.from_reader(BufReader::new(file))
+    }
+
+    /// Begins reading a DTA file from any reader, returning a
+    /// [`HeaderReader`] for the first phase of parsing.
+    //noinspection RsSelfConvention
+    #[must_use]
+    #[inline]
+    pub fn from_reader<R>(self, reader: R) -> HeaderReader<R> {
+        HeaderReader::new(reader, self.encoding)
+    }
+}
+
+impl Default for DtaReader {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }

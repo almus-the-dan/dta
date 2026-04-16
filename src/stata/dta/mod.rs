@@ -6,10 +6,8 @@ pub mod characteristic;
 pub mod characteristic_reader;
 /// Unified error type for the DTA reader.
 pub mod dta_error;
-/// Creates a header reader.
+/// Entry point for configuring and opening a DTA file reader.
 pub mod dta_reader;
-/// Allows configuring a reader.
-pub mod dta_reader_options;
 /// Parsed DTA file header.
 pub mod header;
 /// Entry point for reading a DTA file.

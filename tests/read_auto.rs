@@ -1,14 +1,12 @@
 use std::fs::File;
 
 use dta::stata::dta::dta_reader::DtaReader;
-use dta::stata::dta::dta_reader_options::DtaReaderOptions;
 
 #[test]
 #[ignore = "Using local file that requires a license"]
 fn read_auto_dta_section_counts() {
     let file = File::open("/mnt/c/Publish/auto.dta").expect("failed to open auto.dta");
-    let options = DtaReaderOptions::default();
-    let header_reader = DtaReader::from_file(file, &options);
+    let header_reader = DtaReader::default().from_file(file);
 
     // Header + Schema
     let schema_reader = header_reader.read_header().expect("failed to read header");
