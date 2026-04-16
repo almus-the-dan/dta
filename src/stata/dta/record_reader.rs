@@ -156,8 +156,11 @@ impl<R: BufRead> RecordReader<R> {
         Ok(())
     }
 
-    /// Transitions to value-label reading.
+    /// Transitions to long-string reading.
     ///
+    /// For formats that do not support long strings (pre-117),
+    /// the returned reader immediately yields `None` from
+    /// [`read_long_string`](LongStringReader::read_long_string).
     /// All data records must have been consumed or skipped (via
     /// [`skip_to_end`](Self::skip_to_end)) before calling this
     /// method.
@@ -166,17 +169,17 @@ impl<R: BufRead> RecordReader<R> {
     ///
     /// Returns [`DtaError::Io`] if the data section has not been
     /// fully consumed.
-    pub fn into_value_label_reader(self) -> Result<ValueLabelReader<R>> {
+    pub fn into_long_string_reader(self) -> Result<LongStringReader<R>> {
         if !self.completed {
             return Err(DtaError::io(
                 Section::Records,
                 std::io::Error::other(
                     "data section must be fully consumed \
-                     before transitioning to value-label reading",
+                     before transitioning to long-string reading",
                 ),
             ));
         }
-        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+        Ok(LongStringReader::new(self.state, self.header, self.schema))
     }
 }
 

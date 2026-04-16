@@ -96,38 +96,6 @@ impl<R: BufRead> ValueLabelReader<R> {
         }
         Ok(())
     }
-
-    /// Transitions to long-string reading.
-    ///
-    /// Returns `None` if the format does not have a long-string
-    /// section. All value-label entries must have been consumed or
-    /// skipped (via [`skip_to_end`](Self::skip_to_end)) before
-    /// calling this method.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DtaError::Io`] if the value-label section has not
-    /// been fully consumed.
-    pub fn into_long_string_reader(self) -> Result<Option<LongStringReader<R>>> {
-        if !self.completed {
-            return Err(DtaError::io(
-                Section::ValueLabels,
-                std::io::Error::other(
-                    "value-label section must be fully consumed \
-                     before transitioning to long-string reading",
-                ),
-            ));
-        }
-        if self.header.release().supports_long_strings() {
-            Ok(Some(LongStringReader::new(
-                self.state,
-                self.header,
-                self.schema,
-            )))
-        } else {
-            Ok(None)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
