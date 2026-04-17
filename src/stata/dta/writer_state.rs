@@ -29,8 +29,14 @@ pub(crate) struct WriterState<W> {
 
 impl<W> WriterState<W> {
     #[must_use]
-    pub fn new(_writer: W, _encoding: &'static Encoding) -> Self {
-        todo!()
+    pub fn new(writer: W, encoding: &'static Encoding) -> Self {
+        Self {
+            writer,
+            encoding,
+            buffer: Vec::new(),
+            position: 0,
+            section_offsets: None,
+        }
     }
 
     /// Returns a new state with the given encoding, preserving the
@@ -49,7 +55,7 @@ impl<W> WriterState<W> {
     /// The active character encoding used for string fields.
     #[must_use]
     pub fn encoding(&self) -> &'static Encoding {
-        todo!()
+        self.encoding
     }
 
     /// Section offsets written into the `<map>`, if known.

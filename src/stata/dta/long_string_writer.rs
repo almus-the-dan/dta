@@ -22,8 +22,12 @@ pub struct LongStringWriter<W> {
 
 impl<W> LongStringWriter<W> {
     #[must_use]
-    pub(crate) fn new(_state: WriterState<W>, _header: Header, _schema: Schema) -> Self {
-        todo!()
+    pub(crate) fn new(state: WriterState<W>, header: Header, schema: Schema) -> Self {
+        Self {
+            state,
+            header,
+            schema,
+        }
     }
 
     /// The header emitted during the header phase.
@@ -46,7 +50,7 @@ impl<W> LongStringWriter<W> {
     #[must_use]
     #[inline]
     pub(crate) fn encoding(&self) -> &'static encoding_rs::Encoding {
-        todo!()
+        self.state.encoding()
     }
 }
 

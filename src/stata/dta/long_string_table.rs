@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
@@ -31,15 +32,21 @@ use super::long_string_writer::LongStringWriter;
 /// was referenced from the data section.
 #[derive(Debug, Default)]
 pub struct LongStringTable {
-    by_location: BTreeMap<(u32, u64), Rc<StoredEntry>>,
-    by_content: HashMap<Rc<StoredEntry>, (u32, u64)>,
+    // Ordered storage: drives the iteration order required by the
+    // strL section layout.
+    position: BTreeMap<(u32, u64), StoredEntry>,
+    // Dedup: text and binary payloads live in separate maps, so the
+    // key can be a plain `Rc<[u8]>`. `Rc<T>: Borrow<T>` then lets
+    // `get(&[u8])` look up without allocating a query key.
+    content_text: HashMap<Rc<[u8]>, (u32, u64)>,
+    content_binary: HashMap<Rc<[u8]>, (u32, u64)>,
 }
 
-/// Interned `(data, binary)` payload shared between the location-
-/// and content-indexed maps.
-#[derive(Debug, Hash, Eq, PartialEq)]
+/// Entry held in the location-indexed map. `data` is shared (via
+/// `Rc`) with whichever content-indexed map corresponds to `binary`.
+#[derive(Debug)]
 struct StoredEntry {
-    data: Vec<u8>,
+    data: Rc<[u8]>,
     binary: bool,
 }
 
@@ -48,7 +55,11 @@ impl LongStringTable {
     #[must_use]
     #[inline]
     pub fn new() -> Self {
-        todo!()
+        Self {
+            position: BTreeMap::new(),
+            content_text: HashMap::new(),
+            content_binary: HashMap::new(),
+        }
     }
 
     /// Returns the ref for the given `(data, binary)` payload.
@@ -60,26 +71,44 @@ impl LongStringTable {
     /// key.
     pub fn get_or_insert(
         &mut self,
-        _variable: u32,
-        _observation: u64,
-        _data: &[u8],
-        _binary: bool,
+        variable: u32,
+        observation: u64,
+        data: &[u8],
+        binary: bool,
     ) -> LongStringRef {
-        todo!()
+        let content = if binary {
+            &mut self.content_binary
+        } else {
+            &mut self.content_text
+        };
+        // `Rc<[u8]>: Borrow<[u8]>` lets `get(&[u8])` look up without
+        // allocating. The payload is only copied (via `Rc::from`) on
+        // a miss.
+        if let Some(&(existing_variable, existing_observation)) = content.get(data) {
+            return LongStringRef::new(existing_variable, existing_observation);
+        }
+        let shared: Rc<[u8]> = Rc::from(data);
+        content.insert(Rc::clone(&shared), (variable, observation));
+        let entry = StoredEntry {
+            data: shared,
+            binary,
+        };
+        self.position.insert((variable, observation), entry);
+        LongStringRef::new(variable, observation)
     }
 
     /// Number of unique payloads stored.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        todo!()
+        self.position.len()
     }
 
     /// `true` when the table holds no entries.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.position.is_empty()
     }
 
     /// Yields stored entries in `(variable, observation)` order,
@@ -93,11 +122,173 @@ impl LongStringTable {
     /// loop.
     pub fn iter<'a, W>(
         &'a self,
-        _writer: &LongStringWriter<W>,
+        writer: &LongStringWriter<W>,
     ) -> impl Iterator<Item = LongString<'a>> + 'a {
-        // Placeholder: `todo!()` doesn't unify with `impl Iterator`
-        // in return position, so we return an empty iterator that
-        // will be replaced during implementation.
-        std::iter::empty()
+        let encoding = writer.encoding();
+        self.position
+            .iter()
+            .map(move |(&(variable, observation), entry)| {
+                LongString::new(
+                    variable,
+                    observation,
+                    entry.binary,
+                    Cow::Borrowed(&*entry.data),
+                    encoding,
+                )
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use encoding_rs::{UTF_8, WINDOWS_1252};
+
+    use super::*;
+    use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::header::Header;
+    use crate::stata::dta::release::Release;
+    use crate::stata::dta::schema::Schema;
+    use crate::stata::dta::writer_state::WriterState;
+
+    fn dummy_writer(encoding: &'static encoding_rs::Encoding) -> LongStringWriter<Cursor<Vec<u8>>> {
+        let state = WriterState::new(Cursor::new(Vec::new()), encoding);
+        let header = Header::builder(Release::V118, ByteOrder::LittleEndian).build();
+        let schema = Schema::builder().build().unwrap();
+        LongStringWriter::new(state, header, schema)
+    }
+
+    #[test]
+    fn new_is_empty() {
+        let table = LongStringTable::new();
+        assert_eq!(table.len(), 0);
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let table = LongStringTable::default();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn get_or_insert_new_returns_given_key() {
+        let mut table = LongStringTable::new();
+        let reference = table.get_or_insert(3, 5, b"hello", false);
+        assert_eq!(reference.variable(), 3);
+        assert_eq!(reference.observation(), 5);
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn get_or_insert_duplicate_returns_original_ref() {
+        let mut table = LongStringTable::new();
+        let first = table.get_or_insert(3, 5, b"hello", false);
+        let second = table.get_or_insert(7, 99, b"hello", false);
+        assert_eq!(first, second);
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn get_or_insert_different_binary_flag_is_distinct() {
+        let mut table = LongStringTable::new();
+        let text_ref = table.get_or_insert(1, 1, b"\x00\x01\x02", false);
+        let binary_ref = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
+        assert_ne!(text_ref, binary_ref);
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn get_or_insert_distinct_payloads_are_stored_separately() {
+        let mut table = LongStringTable::new();
+        table.get_or_insert(1, 1, b"a", false);
+        table.get_or_insert(1, 2, b"b", false);
+        table.get_or_insert(1, 3, b"c", false);
+        assert_eq!(table.len(), 3);
+    }
+
+    #[test]
+    fn is_empty_tracks_insertion() {
+        let mut table = LongStringTable::new();
+        assert!(table.is_empty());
+        table.get_or_insert(1, 1, b"x", false);
+        assert!(!table.is_empty());
+    }
+
+    #[test]
+    fn iter_yields_in_variable_then_observation_order() {
+        let mut table = LongStringTable::new();
+        table.get_or_insert(3, 1, b"c1", false);
+        table.get_or_insert(1, 2, b"a2", false);
+        table.get_or_insert(2, 5, b"b5", false);
+        table.get_or_insert(1, 1, b"a1", false);
+
+        let writer = dummy_writer(UTF_8);
+        let ordered: Vec<(u32, u64)> = table
+            .iter(&writer)
+            .map(|ls| (ls.variable(), ls.observation()))
+            .collect();
+        assert_eq!(ordered, vec![(1, 1), (1, 2), (2, 5), (3, 1)]);
+    }
+
+    #[test]
+    fn iter_preserves_data_and_binary_flag() {
+        let mut table = LongStringTable::new();
+        table.get_or_insert(1, 1, b"text", false);
+        table.get_or_insert(2, 2, b"\x00\x01", true);
+        let writer = dummy_writer(UTF_8);
+
+        let long_strings: Vec<_> = table.iter(&writer).collect();
+        assert_eq!(long_strings[0].data(), b"text");
+        assert!(!long_strings[0].is_binary());
+        assert_eq!(long_strings[1].data(), b"\x00\x01");
+        assert!(long_strings[1].is_binary());
+    }
+
+    #[test]
+    fn iter_captures_writer_encoding() {
+        // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
+        let mut table = LongStringTable::new();
+        table.get_or_insert(1, 1, b"\x80", false);
+
+        let writer = dummy_writer(WINDOWS_1252);
+        let decoded = table
+            .iter(&writer)
+            .next()
+            .unwrap()
+            .data_str()
+            .unwrap()
+            .into_owned();
+        assert_eq!(decoded, "€");
+
+        let utf8_writer = dummy_writer(UTF_8);
+        assert!(
+            table
+                .iter(&utf8_writer)
+                .next()
+                .unwrap()
+                .data_str()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn iter_does_not_hold_writer_borrow() {
+        // Proves the iter() / write_long_string() loop pattern
+        // compiles: iter borrows &writer briefly, but the returned
+        // iterator only borrows &self (the table), leaving the writer
+        // free to be moved (and thus mutated) after iter returns.
+        let mut table = LongStringTable::new();
+        table.get_or_insert(1, 1, b"x", false);
+        let writer = dummy_writer(UTF_8);
+        let refs: Vec<_> = table
+            .iter(&writer)
+            .map(|ls| (ls.variable(), ls.observation()))
+            .collect();
+        // Moving `writer` here is only possible if iter() left no
+        // outstanding borrow of it.
+        drop(writer);
+        assert_eq!(refs, vec![(1, 1)]);
     }
 }
