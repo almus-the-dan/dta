@@ -39,6 +39,15 @@ impl<W> LongStringWriter<W> {
     pub fn schema(&self) -> &Schema {
         todo!()
     }
+
+    /// The file's active encoding, captured by
+    /// [`LongStringTable::iter`](super::long_string_table::LongStringTable::iter)
+    /// so the yielded [`LongString`]s carry the right decoder.
+    #[must_use]
+    #[inline]
+    pub(crate) fn encoding(&self) -> &'static encoding_rs::Encoding {
+        todo!()
+    }
 }
 
 impl<W: Write + Seek> LongStringWriter<W> {

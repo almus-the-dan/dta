@@ -28,6 +28,8 @@ pub mod long_string;
 pub mod long_string_reader;
 /// Unresolved reference to a long string in the strL section.
 pub mod long_string_ref;
+/// Deduplicating table of long string entries for writing.
+pub mod long_string_table;
 /// Writes long string (strL) entries to a DTA file.
 pub mod long_string_writer;
 mod reader_state;
