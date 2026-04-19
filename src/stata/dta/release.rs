@@ -261,18 +261,26 @@ impl Release {
         }
     }
 
-    /// Width of the length field in binary expansion-field entries.
+    /// Classifies the binary expansion-field length field for this
+    /// release.
     ///
-    /// Returns 0 for format 104 (no expansion fields), 2 for 105–109,
-    /// and 4 for 110+.
+    /// | Release   | Return           | Meaning                          |
+    /// |-----------|------------------|----------------------------------|
+    /// | V104      | `None`           | no expansion-field section       |
+    /// | V105–V109 | `Some(false)`    | `u16` length (narrow)            |
+    /// | V110+     | `Some(true)`     | `u32` length (extended)          |
+    ///
+    /// Callers should treat `None` as "the file cannot hold
+    /// characteristics at all", and only need to branch on the
+    /// `bool` after confirming the section exists.
     #[must_use]
-    pub(crate) fn expansion_len_width(self) -> usize {
+    pub(crate) fn supports_extended_expansion(self) -> Option<bool> {
         if self >= Self::V110 {
-            4
+            Some(true)
         } else if self >= Self::V105 {
-            2
+            Some(false)
         } else {
-            0
+            None
         }
     }
 
@@ -501,15 +509,15 @@ mod tests {
         assert_eq!(Release::V119.sort_entry_len(), 4);
     }
 
-    // -- expansion_len_width -------------------------------------------------
+    // -- supports_extended_expansion -----------------------------------------
 
     #[test]
-    fn expansion_len_width_boundaries() {
-        assert_eq!(Release::V104.expansion_len_width(), 0);
-        assert_eq!(Release::V105.expansion_len_width(), 2);
-        assert_eq!(Release::V109.expansion_len_width(), 2);
-        assert_eq!(Release::V110.expansion_len_width(), 4);
-        assert_eq!(Release::V119.expansion_len_width(), 4);
+    fn supports_extended_expansion_boundaries() {
+        assert_eq!(Release::V104.supports_extended_expansion(), None);
+        assert_eq!(Release::V105.supports_extended_expansion(), Some(false));
+        assert_eq!(Release::V109.supports_extended_expansion(), Some(false));
+        assert_eq!(Release::V110.supports_extended_expansion(), Some(true));
+        assert_eq!(Release::V119.supports_extended_expansion(), Some(true));
     }
 
     // -- max_fixed_string_len ------------------------------------------------

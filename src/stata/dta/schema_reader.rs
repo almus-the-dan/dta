@@ -800,10 +800,13 @@ mod tests {
         }
 
         // -- Expansion field terminator --
-        let len_width = release.expansion_len_width();
-        if len_width > 0 {
+        if let Some(is_extended) = release.supports_extended_expansion() {
             buffer.push(0); // data_type = 0
-            buffer.extend_from_slice(&vec![0u8; len_width]); // length = 0
+            if is_extended {
+                buffer.extend_from_slice(&[0u8; 4]); // u32 length = 0
+            } else {
+                buffer.extend_from_slice(&[0u8; 2]); // u16 length = 0
+            }
         }
 
         buffer

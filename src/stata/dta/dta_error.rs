@@ -227,6 +227,13 @@ pub enum FormatErrorKind {
         /// The release that cannot represent it.
         release: Release,
     },
+    /// The target release has no expansion-field section at all
+    /// (V104), so the characteristics section cannot hold any
+    /// entries.
+    CharacteristicsUnsupported {
+        /// The release that cannot store characteristics.
+        release: Release,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -270,6 +277,9 @@ impl fmt::Display for FormatErrorKind {
                 f,
                 "variable type {variable_type} is not supported by format {release}",
             ),
+            Self::CharacteristicsUnsupported { release } => {
+                write!(f, "format {release} does not support characteristics",)
+            }
         }
     }
 }

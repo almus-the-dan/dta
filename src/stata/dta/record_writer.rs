@@ -23,22 +23,34 @@ pub struct RecordWriter<W> {
 
 impl<W> RecordWriter<W> {
     #[must_use]
-    pub(crate) fn new(_state: WriterState<W>, _header: Header, _schema: Schema) -> Self {
-        todo!()
+    pub(crate) fn new(state: WriterState<W>, header: Header, schema: Schema) -> Self {
+        Self {
+            state,
+            header,
+            schema,
+        }
     }
 
     /// The header emitted during the header phase.
     #[must_use]
     #[inline]
     pub fn header(&self) -> &Header {
-        todo!()
+        &self.header
     }
 
     /// The schema emitted during the schema phase.
     #[must_use]
     #[inline]
     pub fn schema(&self) -> &Schema {
-        todo!()
+        &self.schema
+    }
+
+    /// Consumes the writer and returns the underlying state. Used by
+    /// characteristic-writer round-trip tests that need to recover
+    /// the sink before `into_long_string_writer` is implemented.
+    #[cfg(test)]
+    pub(crate) fn into_state(self) -> WriterState<W> {
+        self.state
     }
 }
 

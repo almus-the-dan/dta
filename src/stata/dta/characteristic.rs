@@ -38,6 +38,47 @@ impl CharacteristicTarget {
     }
 }
 
+/// Kind of entry in a pre-117 binary expansion-field section.
+///
+/// The DTA spec (see Stata help page `dta_115`) defines only two
+/// `data_type` byte values. All other values are reserved for
+/// future use, and the spec instructs readers to skip unknown
+/// entries rather than treat their payloads as characteristics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ExpansionFieldType {
+    /// Section terminator; paired with `length == 0` to end the
+    /// characteristics section.
+    Terminator = 0,
+    /// Variable or dataset characteristic entry.
+    Characteristic = 1,
+}
+
+impl ExpansionFieldType {
+    /// Raw byte value written to the file.
+    #[must_use]
+    #[inline]
+    pub(crate) fn to_byte(self) -> u8 {
+        // SAFETY: `#[repr(u8)]` guarantees the discriminant fits in
+        // a `u8`. Mirrors `Release::to_byte` — the only other place
+        // in the crate that uses `as` for this purpose.
+        self as u8
+    }
+
+    /// Classifies a raw `data_type` byte read from the file. Returns
+    /// `None` for values outside the two currently defined by the
+    /// DTA spec — the reader's contract is to skip such entries per
+    /// Stata's forward-compatibility rule.
+    #[must_use]
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Terminator),
+            1 => Some(Self::Characteristic),
+            _ => None,
+        }
+    }
+}
+
 /// A single characteristic entry from a DTA file.
 ///
 /// Characteristics are arbitrary key-value metadata attached to

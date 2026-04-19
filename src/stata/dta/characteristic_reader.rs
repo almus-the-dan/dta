@@ -1,6 +1,6 @@
 use std::io::{BufRead, Seek};
 
-use super::characteristic::{Characteristic, CharacteristicTarget};
+use super::characteristic::{Characteristic, CharacteristicTarget, ExpansionFieldType};
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::long_string_reader::LongStringReader;
@@ -268,46 +268,67 @@ impl<R: BufRead> CharacteristicReader<R> {
     }
 
     /// Reads and parses one binary characteristic entry.
+    ///
+    /// Skips past any expansion-field entries whose `data_type` byte
+    /// is neither `0` (terminator) nor `1` (characteristic) —
+    /// per the DTA spec's forward-compat rule, "unknown expansion
+    /// types can simply be skipped". Returns `None` once the
+    /// terminator is reached.
     fn read_binary_characteristic(&mut self) -> Result<Option<Characteristic>> {
-        let expansion_len_width = self.header.release().expansion_len_width();
-        if expansion_len_width == 0 {
+        let Some(is_extended) = self.header.release().supports_extended_expansion() else {
             // V104: no expansion fields.
             self.completed = true;
             return Ok(None);
+        };
+        loop {
+            let (data_type, length) = self.read_binary_entry_header(is_extended)?;
+            match ExpansionFieldType::from_byte(data_type) {
+                Some(ExpansionFieldType::Terminator) => {
+                    self.completed = true;
+                    return Ok(None);
+                }
+                Some(ExpansionFieldType::Characteristic) => {
+                    return Ok(Some(self.parse_characteristic_payload(length)?));
+                }
+                None => {
+                    self.skip_expansion_payload(length)?;
+                }
+            }
         }
-        let is_extended = expansion_len_width == 4;
-        let (data_type, length) = self.read_binary_entry_header(is_extended)?;
-        if data_type == 0 && length == 0 {
-            self.completed = true;
-            return Ok(None);
-        }
-        let characteristic = self.parse_characteristic_payload(length)?;
-        Ok(Some(characteristic))
     }
 
     /// Skips all remaining binary expansion-field entries.
     fn skip_binary_characteristics(&mut self) -> Result<()> {
-        let expansion_len_width = self.header.release().expansion_len_width();
-        if expansion_len_width == 0 {
+        let Some(is_extended) = self.header.release().supports_extended_expansion() else {
             // V104: no expansion fields.
             self.completed = true;
             return Ok(());
-        }
-        let is_extended = expansion_len_width == 4;
+        };
         loop {
             let (data_type, length) = self.read_binary_entry_header(is_extended)?;
-            if data_type == 0 && length == 0 {
-                self.completed = true;
-                return Ok(());
+            match ExpansionFieldType::from_byte(data_type) {
+                Some(ExpansionFieldType::Terminator) => {
+                    self.completed = true;
+                    return Ok(());
+                }
+                Some(ExpansionFieldType::Characteristic) | None => {
+                    self.skip_expansion_payload(length)?;
+                }
             }
-            let length_usize = usize::try_from(length).map_err(|_| {
-                DtaError::io(
-                    Section::Characteristics,
-                    std::io::Error::other("characteristic length exceeds usize"),
-                )
-            })?;
-            self.state.skip(length_usize, Section::Characteristics)?;
         }
+    }
+
+    /// Skips `length` payload bytes inside the characteristics
+    /// section, translating the length to `usize` with a clean I/O
+    /// error on overflow.
+    fn skip_expansion_payload(&mut self, length: u32) -> Result<()> {
+        let length_usize = usize::try_from(length).map_err(|_| {
+            DtaError::io(
+                Section::Characteristics,
+                std::io::Error::other("characteristic length exceeds usize"),
+            )
+        })?;
+        self.state.skip(length_usize, Section::Characteristics)
     }
 
     /// Computes and stores the data-section and value-label offsets
@@ -494,5 +515,146 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
             self.state.seek_to(offset, Section::LongStrings)?;
         }
         Ok(LongStringReader::new(self.state, self.header, self.schema))
+    }
+}
+
+// ===========================================================================
+// Tests — forward-compat skipping of unknown expansion-field data_type bytes
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+    use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::dta_reader::DtaReader;
+    use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::release::Release;
+    use crate::stata::dta::schema::Schema;
+
+    /// Writes a V114 binary DTA header + empty schema through the
+    /// real writer, then appends `expansion_fields` verbatim as the
+    /// characteristics section. Lets us hand-craft expansion-field
+    /// sequences the writer would never emit on its own (e.g.
+    /// unknown `data_type` values reserved by the DTA spec).
+    fn synthetic_v114_file(expansion_fields: &[u8]) -> Vec<u8> {
+        let schema = Schema::builder().build().unwrap();
+        let header = Header::builder(Release::V114, ByteOrder::LittleEndian).build();
+        let characteristic_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap();
+        let mut bytes = characteristic_writer.into_state().into_inner().into_inner();
+        bytes.extend_from_slice(expansion_fields);
+        bytes
+    }
+
+    /// Builds a real characteristic payload: `_dta` / variable-name
+    /// field + characteristic name field + value bytes (null-padded
+    /// for the two names, exact for the value).
+    fn characteristic_payload(target: &str, name: &str, value: &[u8]) -> Vec<u8> {
+        let variable_name_len = Release::V114.variable_name_len();
+        let mut payload = Vec::with_capacity(2 * variable_name_len + value.len());
+        let mut target_field = target.as_bytes().to_vec();
+        target_field.resize(variable_name_len, 0);
+        payload.extend_from_slice(&target_field);
+        let mut name_field = name.as_bytes().to_vec();
+        name_field.resize(variable_name_len, 0);
+        payload.extend_from_slice(&name_field);
+        payload.extend_from_slice(value);
+        payload
+    }
+
+    #[test]
+    fn unknown_expansion_field_type_is_skipped() {
+        // Layout: unknown `data_type=2` entry, then a real
+        // characteristic, then the terminator. The unknown entry's
+        // 7-byte payload should be skipped wholesale.
+        let mut expansion_fields = Vec::new();
+        expansion_fields.push(2u8);
+        expansion_fields.extend_from_slice(&7u32.to_le_bytes());
+        expansion_fields.extend_from_slice(&[0xAA; 7]);
+
+        let payload = characteristic_payload("_dta", "note1", b"hi");
+        expansion_fields.push(1u8);
+        expansion_fields.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        expansion_fields.extend_from_slice(&payload);
+
+        // Terminator.
+        expansion_fields.push(0u8);
+        expansion_fields.extend_from_slice(&0u32.to_le_bytes());
+
+        let bytes = synthetic_v114_file(&expansion_fields);
+        let mut reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+
+        let first = reader.read_characteristic().unwrap().unwrap();
+        assert_eq!(first.target(), &CharacteristicTarget::Dataset);
+        assert_eq!(first.name(), "note1");
+        assert_eq!(first.value(), "hi");
+
+        assert!(reader.read_characteristic().unwrap().is_none());
+    }
+
+    #[test]
+    fn multiple_unknown_expansion_fields_between_real_entries() {
+        // Two unknowns framing one real characteristic — exercises
+        // the read-loop across more than a single skip.
+        let mut expansion_fields = Vec::new();
+
+        expansion_fields.push(2u8);
+        expansion_fields.extend_from_slice(&3u32.to_le_bytes());
+        expansion_fields.extend_from_slice(&[0xBB; 3]);
+
+        let payload = characteristic_payload("_dta", "middle", b"real");
+        expansion_fields.push(1u8);
+        expansion_fields.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        expansion_fields.extend_from_slice(&payload);
+
+        expansion_fields.push(42u8);
+        expansion_fields.extend_from_slice(&9u32.to_le_bytes());
+        expansion_fields.extend_from_slice(&[0xCC; 9]);
+
+        expansion_fields.push(0u8);
+        expansion_fields.extend_from_slice(&0u32.to_le_bytes());
+
+        let bytes = synthetic_v114_file(&expansion_fields);
+        let mut reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+
+        let first = reader.read_characteristic().unwrap().unwrap();
+        assert_eq!(first.name(), "middle");
+        assert_eq!(first.value(), "real");
+        assert!(reader.read_characteristic().unwrap().is_none());
+    }
+
+    #[test]
+    fn skip_to_end_tolerates_unknown_expansion_field_type() {
+        let mut expansion_fields = Vec::new();
+        expansion_fields.push(3u8);
+        expansion_fields.extend_from_slice(&4u32.to_le_bytes());
+        expansion_fields.extend_from_slice(&[0xDD; 4]);
+        expansion_fields.push(0u8);
+        expansion_fields.extend_from_slice(&0u32.to_le_bytes());
+
+        let bytes = synthetic_v114_file(&expansion_fields);
+        let mut reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        reader.skip_to_end().unwrap();
     }
 }
