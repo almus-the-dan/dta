@@ -99,8 +99,7 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     }
 
     /// Closes the characteristics section, patches the data offset
-    /// in the map (XML only), records the data offset in the section
-    /// offsets, and transitions to record writing.
+    /// in the map (XML only), and transitions to record writing.
     ///
     /// For XML the closing `</characteristics>` tag is emitted even
     /// if no entries were written (the opening tag is lazy-emitted
@@ -112,14 +111,6 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     ///
     /// Returns [`DtaError::Io`](DtaError::Io) on
     /// sink failures.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the schema writer did not seed
-    /// [`WriterState::section_offsets`](WriterState::section_offsets)
-    /// before returning this `CharacteristicWriter`. That's an
-    /// internal invariant of the writer chain — reaching this code
-    /// without section offsets means the schema phase was skipped.
     pub fn into_record_writer(mut self) -> Result<RecordWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
@@ -129,15 +120,11 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
         }
         // V104 has no expansion-field section at all — nothing to close.
 
-        let records_offset = self.state.position();
         if release.is_xml_like() {
+            let records_offset = self.state.position();
             self.state
                 .patch_map_entry(9, records_offset, byte_order, Section::Characteristics)?;
         }
-        self.state
-            .section_offsets_mut()
-            .expect("schema writer set section offsets before returning CharacteristicWriter")
-            .set_records(records_offset);
 
         Ok(RecordWriter::new(self.state, self.header, self.schema))
     }
@@ -640,32 +627,5 @@ mod tests {
                 FormatErrorKind::FieldTooLarge { field: Field::CharacteristicName, .. }
             )
         ));
-    }
-
-    // -- XML map offset verification ----------------------------------------
-
-    #[test]
-    fn xml_map_records_offset_patched_after_characteristics() {
-        // After transitioning from CharacteristicWriter to
-        // RecordWriter, `SectionOffsets.records` should equal the
-        // current byte position.
-        let schema = make_schema();
-        let header = make_header(Release::V117, ByteOrder::LittleEndian, &schema);
-        let entry = Characteristic::new(
-            CharacteristicTarget::Dataset,
-            "n".to_owned(),
-            "v".to_owned(),
-        );
-        let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
-            .write_header(header)
-            .unwrap()
-            .write_schema(schema)
-            .unwrap();
-        writer.write_characteristic(&entry).unwrap();
-        let record_writer = writer.into_record_writer().unwrap();
-        let state = record_writer.into_state();
-        let offsets = state.section_offsets().unwrap();
-        assert_eq!(offsets.records(), state.position());
     }
 }

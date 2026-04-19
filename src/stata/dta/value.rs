@@ -179,18 +179,47 @@ fn parse_long_string_ref(
 }
 
 /// Format 118+: `v` = u16 (2 bytes), `o` = u48 (6 bytes).
+///
+/// The 48-bit observation is stored at `column_bytes[2..8]` in the
+/// file's byte order. Widening it to `u64` means padding with two
+/// zero bytes — but *where* the padding lands depends on the byte
+/// order, because LE and BE place their most-significant byte at
+/// opposite ends of the 8-byte window.
+///
+/// - BE: most-significant byte is at index 0 → pad the **high** end,
+///   i.e. put `[0, 0, cb[2..8]]`. `cb[2]` is the u48's `MSByte`.
+/// - LE: most-significant byte is at index 7 → pad the **high** end
+///   too, but the high end is now at indices 6–7 → put
+///   `[cb[2..8], 0, 0]`. `cb[2]` is the u48's `LSByte`.
+///
+/// Matches `ReadStat`'s `read_data_row` strL handling (see
+/// `src/stata/readstat_dta_read.c` for the LE branch that reads
+/// `cb[2]` as the `LSByte` of `o`).
 fn parse_extended_long_string_ref(column_bytes: &[u8], byte_order: ByteOrder) -> (u32, u64) {
     let variable_index = byte_order.read_u16([column_bytes[0], column_bytes[1]]);
-    let observation_index = byte_order.read_u64([
-        0,
-        0,
-        column_bytes[2],
-        column_bytes[3],
-        column_bytes[4],
-        column_bytes[5],
-        column_bytes[6],
-        column_bytes[7],
-    ]);
+    let widened = match byte_order {
+        ByteOrder::BigEndian => [
+            0,
+            0,
+            column_bytes[2],
+            column_bytes[3],
+            column_bytes[4],
+            column_bytes[5],
+            column_bytes[6],
+            column_bytes[7],
+        ],
+        ByteOrder::LittleEndian => [
+            column_bytes[2],
+            column_bytes[3],
+            column_bytes[4],
+            column_bytes[5],
+            column_bytes[6],
+            column_bytes[7],
+            0,
+            0,
+        ],
+    };
+    let observation_index = byte_order.read_u64(widened);
     (u32::from(variable_index), observation_index)
 }
 
@@ -216,4 +245,78 @@ fn unrecognized_value() -> DtaError {
         Section::Records,
         std::io::Error::other("unrecognized Stata missing value bit pattern"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- parse_extended_long_string_ref (V118+) ------------------------------
+
+    #[test]
+    fn parse_extended_long_string_ref_le() {
+        // LE u48 at cb[2..8] with cb[2] = LSByte.
+        // cb[2..8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x00]
+        //   → observation = 0x01 | 0x02<<8 | 0x03<<16 | 0x04<<24
+        //                 | 0x05<<32 | 0x00<<40
+        //                 = 0x0000_0005_0403_0201
+        let bytes = [
+            0x01, 0x02, // variable = 0x0201 (LE u16)
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x00,
+        ];
+        let (variable, observation) =
+            parse_extended_long_string_ref(&bytes, ByteOrder::LittleEndian);
+        assert_eq!(variable, 0x0201);
+        assert_eq!(observation, 0x0000_0005_0403_0201);
+    }
+
+    #[test]
+    fn parse_extended_long_string_ref_le_with_top_bits() {
+        // LE u48: cb[2..8] = [0x01..0x06] → observation = 0x0000_0605_0403_0201.
+        let bytes = [0x10, 0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
+        let (variable, observation) =
+            parse_extended_long_string_ref(&bytes, ByteOrder::LittleEndian);
+        assert_eq!(variable, 0x2010);
+        assert_eq!(observation, 0x0000_0605_0403_0201);
+    }
+
+    #[test]
+    fn parse_extended_long_string_ref_be() {
+        // BE u48 at cb[2..8] with cb[2] = MSByte.
+        // cb[2..8] = [0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        //   → observation = 0x03<<40 | 0x04<<32 | 0x05<<24
+        //                 | 0x06<<16 | 0x07<<8 | 0x08
+        //                 = 0x0000_0304_0506_0708
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let (variable, observation) = parse_extended_long_string_ref(&bytes, ByteOrder::BigEndian);
+        assert_eq!(variable, 0x0102);
+        assert_eq!(observation, 0x0000_0304_0506_0708);
+    }
+
+    #[test]
+    fn parse_extended_long_string_ref_le_observation_one() {
+        // Regression test for the old bug where observation came out
+        // as (true_o << 16). For true_o = 1, the old reader produced
+        // 0x1_0000.
+        let bytes = [
+            0x00, 0x00, // variable = 0
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, // observation = 1 (LE u48)
+        ];
+        let (_, observation) = parse_extended_long_string_ref(&bytes, ByteOrder::LittleEndian);
+        assert_eq!(observation, 1);
+    }
+
+    // -- parse_classic_long_string_ref (V117) --------------------------------
+
+    #[test]
+    fn parse_classic_long_string_ref_le() {
+        let bytes = [
+            0x01, 0x02, 0x03, 0x04, // variable = 0x0403_0201 (LE u32)
+            0x05, 0x06, 0x07, 0x08, // observation = 0x0807_0605 (LE u32)
+        ];
+        let (variable, observation) =
+            parse_classic_long_string_ref(&bytes, ByteOrder::LittleEndian);
+        assert_eq!(variable, 0x0403_0201);
+        assert_eq!(observation, 0x0807_0605);
+    }
 }

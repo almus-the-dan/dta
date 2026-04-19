@@ -34,14 +34,14 @@ impl<W> LongStringWriter<W> {
     #[must_use]
     #[inline]
     pub fn header(&self) -> &Header {
-        todo!()
+        &self.header
     }
 
     /// The schema emitted during the schema phase.
     #[must_use]
     #[inline]
     pub fn schema(&self) -> &Schema {
-        todo!()
+        &self.schema
     }
 
     /// The file's active encoding, captured by
@@ -51,6 +51,14 @@ impl<W> LongStringWriter<W> {
     #[inline]
     pub(crate) fn encoding(&self) -> &'static encoding_rs::Encoding {
         self.state.encoding()
+    }
+
+    /// Consumes the writer and returns the underlying state. Used by
+    /// record-writer round-trip tests that need to recover the sink
+    /// before `into_value_label_writer` is implemented.
+    #[cfg(test)]
+    pub(crate) fn into_state(self) -> WriterState<W> {
+        self.state
     }
 }
 

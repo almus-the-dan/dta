@@ -72,6 +72,8 @@ pub enum Field {
     VariableCount,
     /// The observation count (N) in the file header.
     ObservationCount,
+    /// A cell value inside a data record.
+    VariableValue,
 }
 
 impl fmt::Display for Field {
@@ -93,6 +95,7 @@ impl fmt::Display for Field {
             Self::Timestamp => "timestamp",
             Self::VariableCount => "variable count",
             Self::ObservationCount => "observation count",
+            Self::VariableValue => "variable value",
         })
     }
 }
@@ -227,6 +230,32 @@ pub enum FormatErrorKind {
         /// The release that cannot represent it.
         release: Release,
     },
+    /// A record passed to the writer has a different number of
+    /// values than the schema declares.
+    RecordArityMismatch {
+        /// Number of variables the schema declares.
+        expected: u64,
+        /// Number of values the caller supplied.
+        actual: u64,
+    },
+    /// A value in a record does not match the variable type declared
+    /// in the schema (e.g., `Value::Int` for a `Byte` column).
+    RecordValueTypeMismatch {
+        /// 0-based variable index within the schema.
+        variable_index: u32,
+        /// The type the schema declares for this variable.
+        expected: VariableType,
+    },
+    /// A string value in a record exceeds the fixed-width slot
+    /// declared by the schema.
+    RecordStringTooLong {
+        /// 0-based variable index within the schema.
+        variable_index: u32,
+        /// The `FixedString` width declared in the schema.
+        max: u16,
+        /// Actual encoded byte count of the value.
+        actual: u32,
+    },
     /// The target release has no expansion-field section at all
     /// (V104), so the characteristics section cannot hold any
     /// entries.
@@ -280,6 +309,26 @@ impl fmt::Display for FormatErrorKind {
             Self::CharacteristicsUnsupported { release } => {
                 write!(f, "format {release} does not support characteristics",)
             }
+            Self::RecordArityMismatch { expected, actual } => write!(
+                f,
+                "record has {actual} values but the schema declares {expected} variables",
+            ),
+            Self::RecordValueTypeMismatch {
+                variable_index,
+                expected,
+            } => write!(
+                f,
+                "record value for variable index {variable_index} does not match type {expected}",
+            ),
+            Self::RecordStringTooLong {
+                variable_index,
+                max,
+                actual,
+            } => write!(
+                f,
+                "record string for variable index {variable_index} is {actual} bytes, \
+                 exceeds the {max}-byte column width",
+            ),
         }
     }
 }

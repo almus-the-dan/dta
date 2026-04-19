@@ -6,7 +6,6 @@ use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::release::Release;
 use super::schema::Schema;
-use super::section_offsets::SectionOffsets;
 use super::variable::Variable;
 use super::writer_state::WriterState;
 
@@ -199,35 +198,20 @@ impl<W: Write + Seek> SchemaWriter<W> {
     }
 
     /// Patches the XML `<map>` slots the schema writer now knows
-    /// (indices 0–8) and seeds `WriterState::section_offsets` with
-    /// the characteristics offset, plus placeholder zeros for later
-    /// writers to overwrite.
+    /// (indices 0–8).
     ///
     /// Downstream writers fill indices 9-11 (`data`, `strls`, `value_labels`)
     /// and 12-13 (end-of-file markers) via [`WriterState::patch_map_entry`].
+    /// Binary formats have no map, so this is a no-op for them.
     fn finalize_schema_section(&mut self, descriptor_offsets: &[u64; 14]) -> Result<()> {
-        let release = self.header.release();
-        let byte_order = self.header.byte_order();
-        let characteristics_offset = descriptor_offsets[8];
-
-        if release.is_xml_like() {
-            for (index, &offset) in descriptor_offsets.iter().enumerate().take(9) {
-                self.state
-                    .patch_map_entry(index, offset, byte_order, Section::Schema)?;
-            }
+        if !self.header.release().is_xml_like() {
+            return Ok(());
         }
-
-        // `supports_long_strings()` coincides with `is_xml_like()` in
-        // the currently supported release range (both flip at V117),
-        // but this check is about whether the file has a `<strls>`
-        // section to track — that's semantically `supports_long_strings`.
-        let long_strings_placeholder = release.supports_long_strings().then_some(0);
-        self.state.set_section_offsets(SectionOffsets::new(
-            characteristics_offset,
-            0,
-            0,
-            long_strings_placeholder,
-        ));
+        let byte_order = self.header.byte_order();
+        for (index, &offset) in descriptor_offsets.iter().enumerate().take(9) {
+            self.state
+                .patch_map_entry(index, offset, byte_order, Section::Schema)?;
+        }
         Ok(())
     }
 }
@@ -648,29 +632,6 @@ mod tests {
                 FormatErrorKind::FieldTooLarge { field: Field::VariableCount, .. }
             )
         ));
-    }
-
-    // -- XML map offsets -----------------------------------------------------
-
-    #[test]
-    fn xml_map_records_characteristics_offset() {
-        // After the schema writer runs, the characteristics section
-        // offset (map index 8) should equal the current byte position.
-        let schema = Schema::builder()
-            .add_variable(Variable::builder(VariableType::Byte, "a").format("%8.0g"))
-            .build()
-            .unwrap();
-        let header = make_header(Release::V117, ByteOrder::LittleEndian, &schema);
-        let buffer = Cursor::new(Vec::<u8>::new());
-        let characteristic_writer = DtaWriter::new()
-            .from_writer(buffer)
-            .write_header(header)
-            .unwrap()
-            .write_schema(schema)
-            .unwrap();
-        let state = characteristic_writer.into_state();
-        let characteristics_offset = state.section_offsets().unwrap().characteristics();
-        assert_eq!(characteristics_offset, state.position());
     }
 
     // -- Error cases ---------------------------------------------------------

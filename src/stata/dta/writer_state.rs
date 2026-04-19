@@ -4,7 +4,6 @@ use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
-use super::section_offsets::SectionOffsets;
 
 /// Shared state carried across the writer typestate chain.
 ///
@@ -22,7 +21,6 @@ pub(crate) struct WriterState<W> {
     encoding: &'static Encoding,
     buffer: Vec<u8>,
     position: u64,
-    section_offsets: Option<SectionOffsets>,
     map_offset_base: Option<u64>,
     header_variable_count_offset: Option<u64>,
     header_observation_count_offset: Option<u64>,
@@ -38,7 +36,6 @@ impl<W> WriterState<W> {
             encoding,
             buffer: Vec::new(),
             position: 0,
-            section_offsets: None,
             map_offset_base: None,
             header_variable_count_offset: None,
             header_observation_count_offset: None,
@@ -62,29 +59,6 @@ impl<W> WriterState<W> {
     #[must_use]
     pub fn with_encoding(self, encoding: &'static Encoding) -> Self {
         Self { encoding, ..self }
-    }
-
-    /// Section offsets written into the `<map>`, if known.
-    ///
-    /// Populated by [`SchemaWriter`](super::schema_writer::SchemaWriter)
-    /// (with placeholder zeros for XML formats) and patched by later
-    /// writers as each section's real offset is determined.
-    #[must_use]
-    pub fn section_offsets(&self) -> Option<&SectionOffsets> {
-        self.section_offsets.as_ref()
-    }
-
-    /// Mutable access to section offsets, for writers that need to
-    /// record a newly determined section offset before patching the
-    /// map.
-    pub fn section_offsets_mut(&mut self) -> Option<&mut SectionOffsets> {
-        self.section_offsets.as_mut()
-    }
-
-    /// Stores the section offsets. Called by the schema writer after
-    /// emitting the `<map>` placeholder.
-    pub fn set_section_offsets(&mut self, offsets: SectionOffsets) {
-        self.section_offsets = Some(offsets);
     }
 
     /// Absolute byte offset where the 14 × `u64` payload of the XML
@@ -209,6 +183,38 @@ impl<W: Write> WriterState<W> {
 
     pub fn write_u64(&mut self, value: u64, byte_order: ByteOrder, section: Section) -> Result<()> {
         self.write_exact(&byte_order.write_u64(value), section)
+    }
+
+    /// Writes `bytes` padded with trailing zeros out to `width`
+    /// bytes total, reusing the internal scratch buffer — no
+    /// allocation per call once the buffer's capacity settles at
+    /// the largest string the caller writes.
+    ///
+    /// Caller is responsible for validating `bytes.len() <= width`;
+    /// this primitive trusts its input so the error-shape concern
+    /// stays with the caller (which knows what field / identifier
+    /// to report). Violating the precondition is caught by the
+    /// `debug_assert!`.
+    pub fn write_padded_bytes(
+        &mut self,
+        bytes: &[u8],
+        width: usize,
+        section: Section,
+    ) -> Result<()> {
+        debug_assert!(
+            bytes.len() <= width,
+            "write_padded_bytes: {} > {}",
+            bytes.len(),
+            width,
+        );
+        self.buffer.clear();
+        self.buffer.extend_from_slice(bytes);
+        self.buffer.resize(width, 0);
+        self.writer
+            .write_all(&self.buffer)
+            .map_err(|e| DtaError::io(section, e))?;
+        self.position += u64::try_from(width).expect("field width exceeds u64");
+        Ok(())
     }
 }
 
