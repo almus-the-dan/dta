@@ -66,6 +66,7 @@ impl<W: Write + Seek> SchemaWriter<W> {
         let is_xml = release.is_xml_like();
 
         self.validate_variable_types(&schema)?;
+        self.patch_header_variable_count(&schema)?;
 
         // For XML formats, capture the absolute byte offset of each
         // descriptor (sub)section as we write it, then patch the map
@@ -144,6 +145,36 @@ impl<W: Write + Seek> SchemaWriter<W> {
         self.finalize_schema_section(&descriptor_offsets)?;
 
         Ok(CharacteristicWriter::new(self.state, self.header, schema))
+    }
+
+    /// Seek-patches the header's K (variable count) field with
+    /// `schema.variables().len()`, narrowing to the field's on-disk
+    /// width (`u16` for pre-V119, `u32` for V119+). Called before
+    /// any schema bytes are written so overflow surfaces before the
+    /// file gets polluted.
+    fn patch_header_variable_count(&mut self, schema: &Schema) -> Result<()> {
+        let release = self.header.release();
+        let byte_order = self.header.byte_order();
+        let offset = self
+            .state
+            .header_variable_count_offset()
+            .expect("header writer set K offset before SchemaWriter was constructed");
+        let count = self.state.narrow_to_u32(
+            u64::try_from(schema.variables().len()).expect("variable count exceeds u64"),
+            Section::Header,
+            Field::VariableCount,
+        )?;
+        if release.supports_extended_variable_count() {
+            self.state
+                .patch_u32_at(offset, count, byte_order, Section::Header)?;
+        } else {
+            let narrowed =
+                self.state
+                    .narrow_to_u16(count, Section::Header, Field::VariableCount)?;
+            self.state
+                .patch_u16_at(offset, narrowed, byte_order, Section::Header)?;
+        }
+        Ok(())
     }
 
     /// Validates that every variable's type is representable in the
@@ -560,6 +591,63 @@ mod tests {
         let header = make_header(Release::V117, ByteOrder::LittleEndian, &schema);
         let (_, parsed) = round_trip(header, schema);
         assert!(parsed.variables().is_empty());
+    }
+
+    // -- Header K field patching --------------------------------------------
+
+    #[test]
+    fn k_field_patched_with_schema_variable_count() {
+        // The header writer emits 0 for K; the schema writer must
+        // patch it with schema.variables().len() so the reader sees
+        // the correct count.
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "a").format("%8.0g"))
+            .add_variable(Variable::builder(VariableType::Byte, "b").format("%8.0g"))
+            .add_variable(Variable::builder(VariableType::Byte, "c").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = make_header(Release::V114, ByteOrder::LittleEndian, &schema);
+        let (parsed_header, _) = round_trip(header, schema);
+        assert_eq!(parsed_header.variable_count(), 3);
+    }
+
+    #[test]
+    fn v119_u32_variable_count_round_trip() {
+        // V119 uses a u32 K field; exercise it with > u16::MAX
+        // variables to verify the extended-width patch goes through
+        // the `patch_u32_at` path and reads back correctly.
+        let variables: Vec<_> = (0..70_000)
+            .map(|_| Variable::builder(VariableType::Byte, "v").format("%8.0g"))
+            .collect();
+        let schema = Schema::builder().variables(variables).build().unwrap();
+        let header = make_header(Release::V119, ByteOrder::LittleEndian, &schema);
+        let (parsed_header, parsed_schema) = round_trip(header, schema);
+        assert_eq!(parsed_header.variable_count(), 70_000);
+        assert_eq!(parsed_schema.variables().len(), 70_000);
+    }
+
+    #[test]
+    fn pre_v119_variable_count_overflow_errors() {
+        // V114's K field is u16; 70_000 variables should fail the
+        // narrow-to-u16 patch step with FieldTooLarge.
+        let variables: Vec<_> = (0..70_000)
+            .map(|_| Variable::builder(VariableType::Byte, "v").format("%8.0g"))
+            .collect();
+        let schema = Schema::builder().variables(variables).build().unwrap();
+        let header = make_header(Release::V114, ByteOrder::LittleEndian, &schema);
+        let error = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DtaError::Format(ref e) if matches!(
+                e.kind(),
+                FormatErrorKind::FieldTooLarge { field: Field::VariableCount, .. }
+            )
+        ));
     }
 
     // -- XML map offsets -----------------------------------------------------

@@ -24,6 +24,8 @@ pub(crate) struct WriterState<W> {
     position: u64,
     section_offsets: Option<SectionOffsets>,
     map_offset_base: Option<u64>,
+    header_variable_count_offset: Option<u64>,
+    header_observation_count_offset: Option<u64>,
 }
 
 // -- Construction and accessors ----------------------------------------------
@@ -38,6 +40,8 @@ impl<W> WriterState<W> {
             position: 0,
             section_offsets: None,
             map_offset_base: None,
+            header_variable_count_offset: None,
+            header_observation_count_offset: None,
         }
     }
 
@@ -102,6 +106,38 @@ impl<W> WriterState<W> {
     /// `u64`s.
     pub fn set_map_offset_base(&mut self, offset: u64) {
         self.map_offset_base = Some(offset);
+    }
+
+    /// Byte offset of the variable count (K) field inside the header,
+    /// captured by the header writer so the schema writer can patch
+    /// it with `schema.variables().len()` once the schema is known.
+    /// The field width varies by release — the patcher decides
+    /// whether to write `u16` (pre-V119) or `u32` (V119+).
+    #[must_use]
+    pub fn header_variable_count_offset(&self) -> Option<u64> {
+        self.header_variable_count_offset
+    }
+
+    /// Records where the header K field was written. Called by the
+    /// header writer just before emitting the K placeholder.
+    pub fn set_header_variable_count_offset(&mut self, offset: u64) {
+        self.header_variable_count_offset = Some(offset);
+    }
+
+    /// Byte offset of the observation count (N) field inside the
+    /// header, captured by the header writer so the record writer
+    /// can patch it with the accumulated row count at its transition.
+    /// The field width varies by release — the patcher decides
+    /// whether to write `u32` (pre-V118) or `u64` (V118+).
+    #[must_use]
+    pub fn header_observation_count_offset(&self) -> Option<u64> {
+        self.header_observation_count_offset
+    }
+
+    /// Records where the header N field was written. Called by the
+    /// header writer just before emitting the N placeholder.
+    pub fn set_header_observation_count_offset(&mut self, offset: u64) {
+        self.header_observation_count_offset = Some(offset);
     }
 
     /// Consumes the state and returns the inner writer.
@@ -179,9 +215,51 @@ impl<W: Write> WriterState<W> {
 // -- Seek-back patching -------------------------------------------------------
 
 impl<W: Write + Seek> WriterState<W> {
-    /// Writes a `u64` at an earlier absolute byte offset, then seeks
-    /// back to the end. Used to patch the XML `<map>` placeholders
-    /// once a section's actual offset is known.
+    /// Writes an exact byte slice at an earlier absolute byte offset,
+    /// then seeks back to the end. The underlying primitive behind
+    /// the typed `patch_u16_at` / `patch_u32_at` / `patch_u64_at`
+    /// helpers.
+    pub fn patch_bytes_at(&mut self, offset: u64, bytes: &[u8], section: Section) -> Result<()> {
+        let end_position = self.position;
+        self.writer
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| DtaError::io(section, e))?;
+        self.writer
+            .write_all(bytes)
+            .map_err(|e| DtaError::io(section, e))?;
+        self.writer
+            .seek(SeekFrom::Start(end_position))
+            .map_err(|e| DtaError::io(section, e))?;
+        Ok(())
+    }
+
+    /// Patches a `u16` at an earlier absolute byte offset. Used to
+    /// backfill header K (pre-V119) once the schema is known.
+    pub fn patch_u16_at(
+        &mut self,
+        offset: u64,
+        value: u16,
+        byte_order: ByteOrder,
+        section: Section,
+    ) -> Result<()> {
+        self.patch_bytes_at(offset, &byte_order.write_u16(value), section)
+    }
+
+    /// Patches a `u32` at an earlier absolute byte offset. Used to
+    /// backfill header K (V119) or header N (pre-V118) once the
+    /// accumulated count is known.
+    pub fn patch_u32_at(
+        &mut self,
+        offset: u64,
+        value: u32,
+        byte_order: ByteOrder,
+        section: Section,
+    ) -> Result<()> {
+        self.patch_bytes_at(offset, &byte_order.write_u32(value), section)
+    }
+
+    /// Patches a `u64` at an earlier absolute byte offset. Used to
+    /// patch `<map>` payload slots and header N (V118+).
     pub fn patch_u64_at(
         &mut self,
         offset: u64,
@@ -189,17 +267,7 @@ impl<W: Write + Seek> WriterState<W> {
         byte_order: ByteOrder,
         section: Section,
     ) -> Result<()> {
-        let end_position = self.position;
-        self.writer
-            .seek(SeekFrom::Start(offset))
-            .map_err(|e| DtaError::io(section, e))?;
-        self.writer
-            .write_all(&byte_order.write_u64(value))
-            .map_err(|e| DtaError::io(section, e))?;
-        self.writer
-            .seek(SeekFrom::Start(end_position))
-            .map_err(|e| DtaError::io(section, e))?;
-        Ok(())
+        self.patch_bytes_at(offset, &byte_order.write_u64(value), section)
     }
 
     /// Patches a single `u64` slot in the XML `<map>` payload.
@@ -282,5 +350,117 @@ impl<W: Write> WriterState<W> {
             .map_err(|e| DtaError::io(section, e))?;
         self.position += u64::try_from(len).expect("field length exceeds u64");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    fn new_state() -> WriterState<Cursor<Vec<u8>>> {
+        WriterState::new(Cursor::new(Vec::new()), encoding_rs::UTF_8)
+    }
+
+    // -- Narrowing helpers ---------------------------------------------------
+
+    #[test]
+    fn narrow_to_u16_succeeds_at_max() {
+        let state = new_state();
+        let result = state
+            .narrow_to_u16(u32::from(u16::MAX), Section::Header, Field::VariableCount)
+            .unwrap();
+        assert_eq!(result, u16::MAX);
+    }
+
+    #[test]
+    fn narrow_to_u16_errors_above_max() {
+        let state = new_state();
+        let error = state
+            .narrow_to_u16(
+                u32::from(u16::MAX) + 1,
+                Section::Header,
+                Field::VariableCount,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DtaError::Format(ref e) if matches!(
+                e.kind(),
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::VariableCount,
+                    max,
+                    actual,
+                } if max == u64::from(u16::MAX) && actual == u64::from(u16::MAX) + 1,
+            )
+        ));
+    }
+
+    #[test]
+    fn narrow_to_u32_succeeds_at_max() {
+        let state = new_state();
+        let result = state
+            .narrow_to_u32(
+                u64::from(u32::MAX),
+                Section::Header,
+                Field::ObservationCount,
+            )
+            .unwrap();
+        assert_eq!(result, u32::MAX);
+    }
+
+    #[test]
+    fn narrow_to_u32_errors_above_max() {
+        let state = new_state();
+        let error = state
+            .narrow_to_u32(
+                u64::from(u32::MAX) + 1,
+                Section::Header,
+                Field::ObservationCount,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DtaError::Format(ref e) if matches!(
+                e.kind(),
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::ObservationCount,
+                    max,
+                    actual,
+                } if max == u64::from(u32::MAX) && actual == u64::from(u32::MAX) + 1,
+            )
+        ));
+    }
+
+    // -- patch_u16_at / patch_u32_at round-trip ------------------------------
+
+    #[test]
+    fn patch_u16_at_overwrites_placeholder() {
+        let mut state = new_state();
+        state
+            .write_u16(0, ByteOrder::LittleEndian, Section::Header)
+            .unwrap();
+        state
+            .write_u16(0xDEAD, ByteOrder::LittleEndian, Section::Header)
+            .unwrap();
+        state
+            .patch_u16_at(0, 0xBEEF, ByteOrder::LittleEndian, Section::Header)
+            .unwrap();
+        let bytes = state.into_inner().into_inner();
+        assert_eq!(bytes, vec![0xEF, 0xBE, 0xAD, 0xDE]);
+    }
+
+    #[test]
+    fn patch_u32_at_overwrites_placeholder() {
+        let mut state = new_state();
+        state
+            .write_u32(0, ByteOrder::BigEndian, Section::Header)
+            .unwrap();
+        state
+            .patch_u32_at(0, 0xCAFE_BABE, ByteOrder::BigEndian, Section::Header)
+            .unwrap();
+        let bytes = state.into_inner().into_inner();
+        assert_eq!(bytes, vec![0xCA, 0xFE, 0xBA, 0xBE]);
     }
 }

@@ -96,17 +96,25 @@ pub struct HeaderBuilder {
 
 impl HeaderBuilder {
     /// Sets the number of variables (columns).
+    ///
+    /// Crate-private: the writer derives this from the schema at
+    /// writing time, so users do not set it directly. The reader still
+    /// uses it to populate [`Header`] from parsed file bytes.
     #[must_use]
     #[inline]
-    pub fn variable_count(mut self, count: u32) -> Self {
+    pub(crate) fn variable_count(mut self, count: u32) -> Self {
         self.variable_count = count;
         self
     }
 
     /// Sets the number of observations (rows).
+    ///
+    /// Crate-private: the writer derives this from the record stream
+    /// at writing time, so users do not set it directly. The reader
+    /// still uses it to populate [`Header`] from parsed file bytes.
     #[must_use]
     #[inline]
-    pub fn observation_count(mut self, count: u64) -> Self {
+    pub(crate) fn observation_count(mut self, count: u64) -> Self {
         self.observation_count = count;
         self
     }

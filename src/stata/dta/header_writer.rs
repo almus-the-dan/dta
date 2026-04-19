@@ -92,20 +92,15 @@ impl<W: Write> HeaderWriter<W> {
         self.state
             .write_u8(BINARY_RESERVED_PADDING, Section::Header)?;
 
-        let variable_count = self.state.narrow_to_u16(
-            header.variable_count(),
-            Section::Header,
-            Field::VariableCount,
-        )?;
+        // Binary formats (104–116) always use u16 K and u32 N. Emit
+        // zero placeholders — the schema writer patches K and the
+        // record writer patches N once counts are known.
         self.state
-            .write_u16(variable_count, byte_order, Section::Header)?;
-        let observation_count = self.state.narrow_to_u32(
-            header.observation_count(),
-            Section::Header,
-            Field::ObservationCount,
-        )?;
+            .set_header_variable_count_offset(self.state.position());
+        self.state.write_u16(0, byte_order, Section::Header)?;
         self.state
-            .write_u32(observation_count, byte_order, Section::Header)?;
+            .set_header_observation_count_offset(self.state.position());
+        self.state.write_u32(0, byte_order, Section::Header)?;
 
         self.state.write_fixed_string(
             header.dataset_label(),
@@ -144,35 +139,27 @@ impl<W: Write> HeaderWriter<W> {
             .write_exact(byte_order.to_string().as_bytes(), Section::Header)?;
         self.state.write_exact(b"</byteorder>", Section::Header)?;
 
-        // <K>nvar</K>
+        // <K>nvar</K> — emit a zero placeholder; the schema writer
+        // patches this field once schema.variables().len() is known.
         self.state.write_exact(b"<K>", Section::Header)?;
+        self.state
+            .set_header_variable_count_offset(self.state.position());
         if release.supports_extended_variable_count() {
-            self.state
-                .write_u32(header.variable_count(), byte_order, Section::Header)?;
+            self.state.write_u32(0, byte_order, Section::Header)?;
         } else {
-            let variable_count = self.state.narrow_to_u16(
-                header.variable_count(),
-                Section::Header,
-                Field::VariableCount,
-            )?;
-            self.state
-                .write_u16(variable_count, byte_order, Section::Header)?;
+            self.state.write_u16(0, byte_order, Section::Header)?;
         }
         self.state.write_exact(b"</K>", Section::Header)?;
 
-        // <N>nobs</N>
+        // <N>nobs</N> — emit a zero placeholder; the record writer
+        // patches this field once the accumulated row count is known.
         self.state.write_exact(b"<N>", Section::Header)?;
+        self.state
+            .set_header_observation_count_offset(self.state.position());
         if release.supports_extended_observation_count() {
-            self.state
-                .write_u64(header.observation_count(), byte_order, Section::Header)?;
+            self.state.write_u64(0, byte_order, Section::Header)?;
         } else {
-            let observation_count = self.state.narrow_to_u32(
-                header.observation_count(),
-                Section::Header,
-                Field::ObservationCount,
-            )?;
-            self.state
-                .write_u32(observation_count, byte_order, Section::Header)?;
+            self.state.write_u32(0, byte_order, Section::Header)?;
         }
         self.state.write_exact(b"</N>", Section::Header)?;
 
@@ -314,16 +301,12 @@ mod tests {
     fn binary_v114_little_endian_round_trip() {
         let timestamp = StataTimestamp::parse("01 Jan 2024 13:45").unwrap();
         let original = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(5)
-            .observation_count(100)
             .dataset_label("My Dataset")
             .timestamp(Some(timestamp))
             .build();
         let parsed = round_trip(&original);
         assert_eq!(parsed.release(), Release::V114);
         assert_eq!(parsed.byte_order(), ByteOrder::LittleEndian);
-        assert_eq!(parsed.variable_count(), 5);
-        assert_eq!(parsed.observation_count(), 100);
         assert_eq!(parsed.dataset_label(), "My Dataset");
         assert_eq!(parsed.timestamp(), Some(&timestamp));
     }
@@ -331,22 +314,16 @@ mod tests {
     #[test]
     fn binary_v114_big_endian_round_trip() {
         let original = Header::builder(Release::V114, ByteOrder::BigEndian)
-            .variable_count(3)
-            .observation_count(50)
             .dataset_label("BE test")
             .build();
         let parsed = round_trip(&original);
         assert_eq!(parsed.byte_order(), ByteOrder::BigEndian);
-        assert_eq!(parsed.variable_count(), 3);
-        assert_eq!(parsed.observation_count(), 50);
         assert_eq!(parsed.dataset_label(), "BE test");
     }
 
     #[test]
     fn binary_v104_no_timestamp_round_trip() {
         let original = Header::builder(Release::V104, ByteOrder::LittleEndian)
-            .variable_count(2)
-            .observation_count(10)
             .dataset_label("Old format")
             .build();
         let parsed = round_trip(&original);
@@ -357,9 +334,7 @@ mod tests {
 
     #[test]
     fn binary_empty_label_round_trip() {
-        let original = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .build();
+        let original = Header::builder(Release::V114, ByteOrder::LittleEndian).build();
         let parsed = round_trip(&original);
         assert_eq!(parsed.dataset_label(), "");
         assert!(parsed.timestamp().is_none());
@@ -371,50 +346,30 @@ mod tests {
     fn xml_v117_little_endian_round_trip() {
         let timestamp = StataTimestamp::parse("01 Jan 2024 13:45").unwrap();
         let original = Header::builder(Release::V117, ByteOrder::LittleEndian)
-            .variable_count(5)
-            .observation_count(100)
             .dataset_label("XML test")
             .timestamp(Some(timestamp))
             .build();
         let parsed = round_trip(&original);
         assert_eq!(parsed.release(), Release::V117);
-        assert_eq!(parsed.variable_count(), 5);
-        assert_eq!(parsed.observation_count(), 100);
         assert_eq!(parsed.dataset_label(), "XML test");
         assert_eq!(parsed.timestamp(), Some(&timestamp));
     }
 
     #[test]
-    fn xml_v118_u64_observation_count_round_trip() {
-        let original = Header::builder(Release::V118, ByteOrder::LittleEndian)
-            .variable_count(10)
-            .observation_count(5_000_000_000)
-            .dataset_label("big n")
-            .build();
-        let parsed = round_trip(&original);
-        assert_eq!(parsed.observation_count(), 5_000_000_000);
-    }
-
-    #[test]
-    fn xml_v119_u32_variable_count_round_trip() {
-        let original = Header::builder(Release::V119, ByteOrder::LittleEndian)
-            .variable_count(70_000)
-            .observation_count(500)
-            .dataset_label("wide")
-            .build();
-        let parsed = round_trip(&original);
-        assert_eq!(parsed.variable_count(), 70_000);
-    }
-
-    #[test]
     fn xml_empty_label_round_trip() {
-        let original = Header::builder(Release::V117, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .build();
+        let original = Header::builder(Release::V117, ByteOrder::LittleEndian).build();
         let parsed = round_trip(&original);
         assert_eq!(parsed.dataset_label(), "");
         assert!(parsed.timestamp().is_none());
     }
+
+    // The header writer now emits zero placeholders for the K (variable
+    // count) and N (observation count) fields — the schema writer and
+    // record writer patch them once the real counts are known. Count
+    // round-trip tests for the wide-field paths (V119 u32 K, V118 u64 N)
+    // live with the writer that owns the patch: see
+    // `schema_writer::tests::v119_u32_variable_count_round_trip` and
+    // the future record writer tests for N overflow.
 
     // -- Error cases ---------------------------------------------------------
 
@@ -422,7 +377,6 @@ mod tests {
     fn binary_label_too_long_errors() {
         let long_label = "x".repeat(200);
         let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
             .dataset_label(long_label)
             .build();
         let error = DtaWriter::new()
@@ -439,47 +393,9 @@ mod tests {
     }
 
     #[test]
-    fn binary_variable_count_overflow_errors() {
-        let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(70_000)
-            .build();
-        let error = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
-            .write_header(header)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            DtaError::Format(ref e) if matches!(
-                e.kind(),
-                FormatErrorKind::FieldTooLarge { field: Field::VariableCount, .. }
-            )
-        ));
-    }
-
-    #[test]
-    fn xml_v117_observation_count_overflow_errors() {
-        let header = Header::builder(Release::V117, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .observation_count(u64::from(u32::MAX) + 1)
-            .build();
-        let error = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
-            .write_header(header)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            DtaError::Format(ref e) if matches!(
-                e.kind(),
-                FormatErrorKind::FieldTooLarge { field: Field::ObservationCount, .. }
-            )
-        ));
-    }
-
-    #[test]
     fn unrepresentable_label_encoding_errors() {
         // Windows-1252 cannot represent Japanese characters.
         let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
             .dataset_label("日本語")
             .build();
         let error = DtaWriter::new()
@@ -498,7 +414,6 @@ mod tests {
     #[test]
     fn utf8_encoding_override_allows_non_latin_label() {
         let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
             .dataset_label("日本語")
             .build();
         let schema_writer = DtaWriter::new()
