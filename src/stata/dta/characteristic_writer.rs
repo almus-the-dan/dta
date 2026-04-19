@@ -27,22 +27,34 @@ pub struct CharacteristicWriter<W> {
 
 impl<W> CharacteristicWriter<W> {
     #[must_use]
-    pub(crate) fn new(_state: WriterState<W>, _header: Header, _schema: Schema) -> Self {
-        todo!()
+    pub(crate) fn new(state: WriterState<W>, header: Header, schema: Schema) -> Self {
+        Self {
+            state,
+            header,
+            schema,
+        }
     }
 
     /// The header emitted by the previous phase.
     #[must_use]
     #[inline]
     pub fn header(&self) -> &Header {
-        todo!()
+        &self.header
     }
 
     /// The schema emitted by the previous phase.
     #[must_use]
     #[inline]
     pub fn schema(&self) -> &Schema {
-        todo!()
+        &self.schema
+    }
+
+    /// Consumes the writer and returns the underlying state. Used by
+    /// schema-writer round-trip tests that need to recover the sink
+    /// before the remaining writer phases are implemented.
+    #[cfg(test)]
+    pub(crate) fn into_state(self) -> WriterState<W> {
+        self.state
     }
 }
 

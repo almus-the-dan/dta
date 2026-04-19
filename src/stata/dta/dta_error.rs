@@ -1,5 +1,8 @@
 use core::fmt;
 
+use super::release::Release;
+use super::variable_type::VariableType;
+
 /// Section of the DTA file where an error occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
@@ -216,6 +219,14 @@ pub enum FormatErrorKind {
         /// The actual value presented by the caller.
         actual: u64,
     },
+    /// A variable type cannot be written in the target release
+    /// (e.g., `strL` requested for a pre-117 format).
+    UnsupportedVariableType {
+        /// The type that was requested.
+        variable_type: VariableType,
+        /// The release that cannot represent it.
+        release: Release,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -251,6 +262,13 @@ impl fmt::Display for FormatErrorKind {
             Self::FieldTooLarge { field, max, actual } => write!(
                 f,
                 "{field} value {actual} exceeds maximum {max} for this format",
+            ),
+            Self::UnsupportedVariableType {
+                variable_type,
+                release,
+            } => write!(
+                f,
+                "variable type {variable_type} is not supported by format {release}",
             ),
         }
     }

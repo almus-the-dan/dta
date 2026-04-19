@@ -23,6 +23,7 @@ pub(crate) struct WriterState<W> {
     buffer: Vec<u8>,
     position: u64,
     section_offsets: Option<SectionOffsets>,
+    map_offset_base: Option<u64>,
 }
 
 // -- Construction and accessors ----------------------------------------------
@@ -36,6 +37,7 @@ impl<W> WriterState<W> {
             buffer: Vec::new(),
             position: 0,
             section_offsets: None,
+            map_offset_base: None,
         }
     }
 
@@ -81,12 +83,67 @@ impl<W> WriterState<W> {
         self.section_offsets = Some(offsets);
     }
 
+    /// Absolute byte offset where the 14 × `u64` payload of the XML
+    /// `<map>` section was written (the first byte after the opening
+    /// `<map>` tag).
+    ///
+    /// Used by downstream writers with
+    /// [`patch_map_entry`](Self::patch_map_entry) to backfill a single
+    /// map slot once its section's real offset is known. Returns
+    /// `None` for binary formats (which have no `<map>`) and before
+    /// the schema has been written.
+    #[must_use]
+    pub fn map_offset_base(&self) -> Option<u64> {
+        self.map_offset_base
+    }
+
+    /// Records where the XML `<map>` payload starts. Called by the
+    /// schema writer immediately before it writes the 14 placeholder
+    /// `u64`s.
+    pub fn set_map_offset_base(&mut self, offset: u64) {
+        self.map_offset_base = Some(offset);
+    }
+
     /// Consumes the state and returns the inner writer.
     ///
     /// Called by [`ValueLabelWriter::finish`](super::value_label_writer::ValueLabelWriter::finish)
     /// after the closing tag has been emitted.
     pub fn into_inner(self) -> W {
         self.writer
+    }
+
+    /// Narrows a `u32` value to `u16`, producing a `FieldTooLarge`
+    /// format error (tagged with the current [`position`](Self::position))
+    /// on overflow.
+    pub fn narrow_to_u16(&self, value: u32, section: Section, field: Field) -> Result<u16> {
+        u16::try_from(value).map_err(|_| {
+            DtaError::format(
+                section,
+                self.position,
+                FormatErrorKind::FieldTooLarge {
+                    field,
+                    max: u64::from(u16::MAX),
+                    actual: u64::from(value),
+                },
+            )
+        })
+    }
+
+    /// Narrows a `u64` value to `u32`, producing a `FieldTooLarge`
+    /// format error (tagged with the current [`position`](Self::position))
+    /// on overflow.
+    pub fn narrow_to_u32(&self, value: u64, section: Section, field: Field) -> Result<u32> {
+        u32::try_from(value).map_err(|_| {
+            DtaError::format(
+                section,
+                self.position,
+                FormatErrorKind::FieldTooLarge {
+                    field,
+                    max: u64::from(u32::MAX),
+                    actual: value,
+                },
+            )
+        })
     }
 }
 
@@ -143,6 +200,35 @@ impl<W: Write + Seek> WriterState<W> {
             .seek(SeekFrom::Start(end_position))
             .map_err(|e| DtaError::io(section, e))?;
         Ok(())
+    }
+
+    /// Patches a single `u64` slot in the XML `<map>` payload.
+    ///
+    /// `index` is the 0-based slot index (valid range: 0..14).
+    /// Requires [`set_map_offset_base`](Self::set_map_offset_base) to
+    /// have been called — returns
+    /// [`missing_section_offsets`](DtaError::missing_section_offsets)
+    /// otherwise.
+    pub fn patch_map_entry(
+        &mut self,
+        index: usize,
+        value: u64,
+        byte_order: ByteOrder,
+        section: Section,
+    ) -> Result<()> {
+        let base = self
+            .map_offset_base
+            .ok_or_else(|| DtaError::missing_section_offsets(section))?;
+        let slot_offset = index
+            .checked_mul(8)
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| {
+                DtaError::io(
+                    section,
+                    std::io::Error::other("map slot byte offset exceeds u64"),
+                )
+            })?;
+        self.patch_u64_at(base + slot_offset, value, byte_order, section)
     }
 }
 

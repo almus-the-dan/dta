@@ -92,11 +92,18 @@ impl<W: Write> HeaderWriter<W> {
         self.state
             .write_u8(BINARY_RESERVED_PADDING, Section::Header)?;
 
-        let position = self.state.position();
-        let variable_count = narrow_variable_count(header.variable_count(), position)?;
+        let variable_count = self.state.narrow_to_u16(
+            header.variable_count(),
+            Section::Header,
+            Field::VariableCount,
+        )?;
         self.state
             .write_u16(variable_count, byte_order, Section::Header)?;
-        let observation_count = narrow_observation_count(header.observation_count(), position)?;
+        let observation_count = self.state.narrow_to_u32(
+            header.observation_count(),
+            Section::Header,
+            Field::ObservationCount,
+        )?;
         self.state
             .write_u32(observation_count, byte_order, Section::Header)?;
 
@@ -143,8 +150,11 @@ impl<W: Write> HeaderWriter<W> {
             self.state
                 .write_u32(header.variable_count(), byte_order, Section::Header)?;
         } else {
-            let variable_count =
-                narrow_variable_count(header.variable_count(), self.state.position())?;
+            let variable_count = self.state.narrow_to_u16(
+                header.variable_count(),
+                Section::Header,
+                Field::VariableCount,
+            )?;
             self.state
                 .write_u16(variable_count, byte_order, Section::Header)?;
         }
@@ -156,8 +166,11 @@ impl<W: Write> HeaderWriter<W> {
             self.state
                 .write_u64(header.observation_count(), byte_order, Section::Header)?;
         } else {
-            let observation_count =
-                narrow_observation_count(header.observation_count(), self.state.position())?;
+            let observation_count = self.state.narrow_to_u32(
+                header.observation_count(),
+                Section::Header,
+                Field::ObservationCount,
+            )?;
             self.state
                 .write_u32(observation_count, byte_order, Section::Header)?;
         }
@@ -265,38 +278,6 @@ impl<W: Write> HeaderWriter<W> {
         self.state
             .write_fixed_string(formatted, len, Section::Header, Field::Timestamp)
     }
-}
-
-/// Narrows a `u32` variable count to `u16` for pre-119 formats,
-/// returning a format error on overflow.
-fn narrow_variable_count(count: u32, position: u64) -> Result<u16> {
-    u16::try_from(count).map_err(|_| {
-        DtaError::format(
-            Section::Header,
-            position,
-            FormatErrorKind::FieldTooLarge {
-                field: Field::VariableCount,
-                max: u64::from(u16::MAX),
-                actual: u64::from(count),
-            },
-        )
-    })
-}
-
-/// Narrows a `u64` observation count to `u32` for pre-118 formats,
-/// returning a format error on overflow.
-fn narrow_observation_count(count: u64, position: u64) -> Result<u32> {
-    u32::try_from(count).map_err(|_| {
-        DtaError::format(
-            Section::Header,
-            position,
-            FormatErrorKind::FieldTooLarge {
-                field: Field::ObservationCount,
-                max: u64::from(u32::MAX),
-                actual: count,
-            },
-        )
-    })
 }
 
 #[cfg(test)]
