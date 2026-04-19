@@ -25,15 +25,23 @@ pub struct SchemaWriter<W> {
 
 impl<W> SchemaWriter<W> {
     #[must_use]
-    pub(crate) fn new(_state: WriterState<W>, _header: Header) -> Self {
-        todo!()
+    pub(crate) fn new(state: WriterState<W>, header: Header) -> Self {
+        Self { state, header }
     }
 
     /// The header emitted by the previous phase.
     #[must_use]
     #[inline]
     pub fn header(&self) -> &Header {
-        todo!()
+        &self.header
+    }
+
+    /// Consumes the writer and returns the underlying state, used by
+    /// tests that want to recover the sink before `write_schema` is
+    /// implemented.
+    #[cfg(test)]
+    pub(crate) fn into_state(self) -> WriterState<W> {
+        self.state
     }
 }
 

@@ -77,7 +77,7 @@ impl TryFrom<u8> for Release {
 
 impl fmt::Display for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.number())
+        write!(f, "{}", self.to_byte())
     }
 }
 
@@ -88,7 +88,7 @@ impl fmt::Display for Release {
 impl Release {
     /// The raw format version number (e.g., 117).
     #[must_use]
-    pub(crate) fn number(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         // SAFETY: #[repr(u8)] guarantees the discriminant fits in u8.
         // This is the only place we use `as` for this enum.
         self as u8
@@ -131,23 +131,21 @@ impl Release {
     /// Fixed-length dataset label field size (binary formats only).
     ///
     /// For XML formats (117+), the label has a length prefix instead;
-    /// see [`data_label_len_width`](Self::data_label_len_width).
+    /// see [`supports_extended_dataset_label`](Self::supports_extended_dataset_label).
     #[must_use]
     pub(crate) fn dataset_label_len(self) -> usize {
         if self < Self::V108 { 32 } else { 81 }
     }
 
-    /// Width (in bytes) of the dataset-label length prefix for XML
-    /// formats: 1 for format 117, 2 for 118+.
+    /// Whether the XML dataset-label length prefix is stored as a
+    /// `u16` (format 118+). Earlier XML formats (117) use a `u8`.
     ///
-    /// Returns 0 for binary formats (no length prefix).
+    /// Only meaningful for XML formats; binary formats do not write
+    /// a length prefix for the dataset label.
     #[must_use]
-    pub(crate) fn data_label_len_width(self) -> usize {
-        if self >= Self::V118 {
-            2
-        } else {
-            usize::from(self >= Self::V117)
-        }
+    #[inline]
+    pub(crate) fn supports_extended_dataset_label(self) -> bool {
+        self >= Self::V118
     }
 
     /// Whether this format stores a timestamp in the header.
@@ -308,7 +306,7 @@ mod tests {
     fn try_from_valid_range() {
         for v in 104..=119 {
             let r = Release::try_from(v).unwrap();
-            assert_eq!(r.number(), v);
+            assert_eq!(r.to_byte(), v);
         }
     }
 
@@ -378,22 +376,17 @@ mod tests {
         assert_eq!(Release::V116.dataset_label_len(), 81);
     }
 
-    // -- data_label_len_width ------------------------------------------------
+    // -- supports_extended_dataset_label -------------------------------------
 
     #[test]
-    fn data_label_len_width_binary() {
-        assert_eq!(Release::V116.data_label_len_width(), 0);
+    fn supports_extended_dataset_label_pre_118() {
+        assert!(!Release::V117.supports_extended_dataset_label());
     }
 
     #[test]
-    fn data_label_len_width_117() {
-        assert_eq!(Release::V117.data_label_len_width(), 1);
-    }
-
-    #[test]
-    fn data_label_len_width_118_plus() {
-        assert_eq!(Release::V118.data_label_len_width(), 2);
-        assert_eq!(Release::V119.data_label_len_width(), 2);
+    fn supports_extended_dataset_label_118_plus() {
+        assert!(Release::V118.supports_extended_dataset_label());
+        assert!(Release::V119.supports_extended_dataset_label());
     }
 
     // -- timestamp_len -------------------------------------------------------

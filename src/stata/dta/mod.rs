@@ -1,5 +1,3 @@
-/// In-memory [`Seek`](std::io::Seek) adapter for write-only sinks.
-pub mod buffered_seek;
 /// Byte order (endianness) representation.
 pub mod byte_order;
 /// A single characteristic entry (key-value metadata).

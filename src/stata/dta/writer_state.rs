@@ -1,9 +1,9 @@
-use std::io::{Seek, Write};
+use std::io::{Seek, SeekFrom, Write};
 
 use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
-use super::dta_error::{Field, Result, Section};
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::section_offsets::SectionOffsets;
 
 /// Shared state carried across the writer typestate chain.
@@ -39,23 +39,23 @@ impl<W> WriterState<W> {
         }
     }
 
-    /// Returns a new state with the given encoding, preserving the
-    /// writer, buffer allocation, position, and section offsets.
-    #[must_use]
-    pub fn with_encoding(self, _encoding: &'static Encoding) -> Self {
-        todo!()
-    }
-
     /// Current byte offset in the output sink.
     #[must_use]
     pub fn position(&self) -> u64 {
-        todo!()
+        self.position
     }
 
     /// The active character encoding used for string fields.
     #[must_use]
     pub fn encoding(&self) -> &'static Encoding {
         self.encoding
+    }
+
+    /// Returns a new state with the given encoding, preserving the
+    /// writer, buffer allocation, position, and section offsets.
+    #[must_use]
+    pub fn with_encoding(self, encoding: &'static Encoding) -> Self {
+        Self { encoding, ..self }
     }
 
     /// Section offsets written into the `<map>`, if known.
@@ -65,20 +65,20 @@ impl<W> WriterState<W> {
     /// writers as each section's real offset is determined.
     #[must_use]
     pub fn section_offsets(&self) -> Option<&SectionOffsets> {
-        todo!()
+        self.section_offsets.as_ref()
     }
 
     /// Mutable access to section offsets, for writers that need to
     /// record a newly determined section offset before patching the
     /// map.
     pub fn section_offsets_mut(&mut self) -> Option<&mut SectionOffsets> {
-        todo!()
+        self.section_offsets.as_mut()
     }
 
     /// Stores the section offsets. Called by the schema writer after
     /// emitting the `<map>` placeholder.
-    pub fn set_section_offsets(&mut self, _offsets: SectionOffsets) {
-        todo!()
+    pub fn set_section_offsets(&mut self, offsets: SectionOffsets) {
+        self.section_offsets = Some(offsets);
     }
 
     /// Consumes the state and returns the inner writer.
@@ -86,7 +86,7 @@ impl<W> WriterState<W> {
     /// Called by [`ValueLabelWriter::finish`](super::value_label_writer::ValueLabelWriter::finish)
     /// after the closing tag has been emitted.
     pub fn into_inner(self) -> W {
-        todo!()
+        self.writer
     }
 }
 
@@ -94,39 +94,28 @@ impl<W> WriterState<W> {
 
 impl<W: Write> WriterState<W> {
     /// Writes an exact byte slice, advancing the tracked position.
-    pub fn write_exact(&mut self, _bytes: &[u8], _section: Section) -> Result<()> {
-        todo!()
+    pub fn write_exact(&mut self, bytes: &[u8], section: Section) -> Result<()> {
+        self.writer
+            .write_all(bytes)
+            .map_err(|e| DtaError::io(section, e))?;
+        self.position += u64::try_from(bytes.len()).expect("buffer length exceeds u64");
+        Ok(())
     }
 
-    pub fn write_u8(&mut self, _value: u8, _section: Section) -> Result<()> {
-        todo!()
+    pub fn write_u8(&mut self, value: u8, section: Section) -> Result<()> {
+        self.write_exact(&[value], section)
     }
 
-    pub fn write_u16(
-        &mut self,
-        _value: u16,
-        _byte_order: ByteOrder,
-        _section: Section,
-    ) -> Result<()> {
-        todo!()
+    pub fn write_u16(&mut self, value: u16, byte_order: ByteOrder, section: Section) -> Result<()> {
+        self.write_exact(&byte_order.write_u16(value), section)
     }
 
-    pub fn write_u32(
-        &mut self,
-        _value: u32,
-        _byte_order: ByteOrder,
-        _section: Section,
-    ) -> Result<()> {
-        todo!()
+    pub fn write_u32(&mut self, value: u32, byte_order: ByteOrder, section: Section) -> Result<()> {
+        self.write_exact(&byte_order.write_u32(value), section)
     }
 
-    pub fn write_u64(
-        &mut self,
-        _value: u64,
-        _byte_order: ByteOrder,
-        _section: Section,
-    ) -> Result<()> {
-        todo!()
+    pub fn write_u64(&mut self, value: u64, byte_order: ByteOrder, section: Section) -> Result<()> {
+        self.write_exact(&byte_order.write_u64(value), section)
     }
 }
 
@@ -138,12 +127,22 @@ impl<W: Write + Seek> WriterState<W> {
     /// once a section's actual offset is known.
     pub fn patch_u64_at(
         &mut self,
-        _offset: u64,
-        _value: u64,
-        _byte_order: ByteOrder,
-        _section: Section,
+        offset: u64,
+        value: u64,
+        byte_order: ByteOrder,
+        section: Section,
     ) -> Result<()> {
-        todo!()
+        let end_position = self.position;
+        self.writer
+            .seek(SeekFrom::Start(offset))
+            .map_err(|e| DtaError::io(section, e))?;
+        self.writer
+            .write_all(&byte_order.write_u64(value))
+            .map_err(|e| DtaError::io(section, e))?;
+        self.writer
+            .seek(SeekFrom::Start(end_position))
+            .map_err(|e| DtaError::io(section, e))?;
+        Ok(())
     }
 }
 
@@ -155,16 +154,47 @@ impl<W: Write> WriterState<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the encoded byte length exceeds `len` or if
-    /// the value contains characters the active encoding cannot
-    /// represent.
+    /// Returns [`FormatErrorKind::InvalidEncoding`] if `value`
+    /// contains characters the active encoding cannot represent, and
+    /// [`FormatErrorKind::FieldTooLarge`] if the encoded length
+    /// exceeds `len`.
     pub fn write_fixed_string(
         &mut self,
-        _value: &str,
-        _len: usize,
-        _section: Section,
-        _field: Field,
+        value: &str,
+        len: usize,
+        section: Section,
+        field: Field,
     ) -> Result<()> {
-        todo!()
+        if len == 0 {
+            return Ok(());
+        }
+        let position = self.position;
+        let (encoded, _, had_unmappable) = self.encoding.encode(value);
+        if had_unmappable {
+            return Err(DtaError::format(
+                section,
+                position,
+                FormatErrorKind::InvalidEncoding { field },
+            ));
+        }
+        if encoded.len() > len {
+            return Err(DtaError::format(
+                section,
+                position,
+                FormatErrorKind::FieldTooLarge {
+                    field,
+                    max: u64::try_from(len).expect("field length exceeds u64"),
+                    actual: u64::try_from(encoded.len()).expect("encoded length exceeds u64"),
+                },
+            ));
+        }
+        self.buffer.clear();
+        self.buffer.extend_from_slice(&encoded);
+        self.buffer.resize(len, 0);
+        self.writer
+            .write_all(&self.buffer)
+            .map_err(|e| DtaError::io(section, e))?;
+        self.position += u64::try_from(len).expect("field length exceeds u64");
+        Ok(())
     }
 }

@@ -302,13 +302,12 @@ impl<R: Read> HeaderReader<R> {
 
     /// Reads the label-length prefix: `u8` for 117, `u16` for 118+.
     fn read_xml_label_len(&mut self, release: Release, byte_order: ByteOrder) -> Result<usize> {
-        match release.data_label_len_width() {
-            2 => self
-                .state
+        if release.supports_extended_dataset_label() {
+            self.state
                 .read_u16(byte_order, Section::Header)
-                .map(usize::from),
-            1 => self.state.read_u8(Section::Header).map(usize::from),
-            _ => Ok(0),
+                .map(usize::from)
+        } else {
+            self.state.read_u8(Section::Header).map(usize::from)
         }
     }
 }
@@ -393,7 +392,7 @@ mod tests {
         let byte_order = header.byte_order();
 
         let mut buffer = vec![
-            release.number(),
+            release.to_byte(),
             byte_order.to_byte(),
             0x01, // filetype
             0x00, // unused
@@ -434,7 +433,7 @@ mod tests {
 
         // <release>
         buffer.extend_from_slice(b"<release>");
-        buffer.extend_from_slice(format!("{:03}", release.number()).as_bytes());
+        buffer.extend_from_slice(format!("{:03}", release.to_byte()).as_bytes());
         buffer.extend_from_slice(b"</release>");
 
         // <byteorder>
@@ -465,13 +464,11 @@ mod tests {
         // <label>
         let label_bytes = header.dataset_label().as_bytes();
         buffer.extend_from_slice(b"<label>");
-        match release.data_label_len_width() {
-            2 => {
-                let len = u16::try_from(label_bytes.len()).unwrap();
-                buffer.extend_from_slice(&byte_order.write_u16(len));
-            }
-            1 => buffer.push(u8::try_from(label_bytes.len()).unwrap()),
-            _ => {}
+        if release.supports_extended_dataset_label() {
+            let len = u16::try_from(label_bytes.len()).unwrap();
+            buffer.extend_from_slice(&byte_order.write_u16(len));
+        } else {
+            buffer.push(u8::try_from(label_bytes.len()).unwrap());
         }
         buffer.extend_from_slice(label_bytes);
         buffer.extend_from_slice(b"</label>");

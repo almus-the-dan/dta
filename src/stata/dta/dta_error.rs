@@ -63,6 +63,12 @@ pub enum Field {
     CharacteristicName,
     /// The value/contents field of a characteristic entry.
     CharacteristicValue,
+    /// The timestamp field in the file header.
+    Timestamp,
+    /// The variable count (K) in the file header.
+    VariableCount,
+    /// The observation count (N) in the file header.
+    ObservationCount,
 }
 
 impl fmt::Display for Field {
@@ -81,6 +87,9 @@ impl fmt::Display for Field {
             Self::LongStringType => "long string type",
             Self::CharacteristicName => "characteristic name",
             Self::CharacteristicValue => "characteristic value",
+            Self::Timestamp => "timestamp",
+            Self::VariableCount => "variable count",
+            Self::ObservationCount => "observation count",
         })
     }
 }
@@ -196,6 +205,17 @@ pub enum FormatErrorKind {
     InvalidValueLabelTable,
     /// A strL entry header is malformed.
     InvalidLongStringEntry,
+    /// A value is too large for the field that would store it
+    /// (e.g., a string longer than its fixed-width slot, or a
+    /// variable count that exceeds the format's 16-bit ceiling).
+    FieldTooLarge {
+        /// The field being written.
+        field: Field,
+        /// The largest representable value for that field.
+        max: u64,
+        /// The actual value presented by the caller.
+        actual: u64,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -228,6 +248,10 @@ impl fmt::Display for FormatErrorKind {
                 f.write_str("value-label table has inconsistent offsets")
             }
             Self::InvalidLongStringEntry => f.write_str("malformed strL entry header"),
+            Self::FieldTooLarge { field, max, actual } => write!(
+                f,
+                "{field} value {actual} exceeds maximum {max} for this format",
+            ),
         }
     }
 }

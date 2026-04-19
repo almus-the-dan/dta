@@ -4,7 +4,7 @@ use std::path::Path;
 
 use encoding_rs::Encoding;
 
-use crate::stata::dta::dta_error::Result;
+use crate::stata::dta::dta_error::{DtaError, Result, Section};
 use crate::stata::dta::header_writer::HeaderWriter;
 
 /// Builder for configuring and opening a DTA file writer.
@@ -17,9 +17,7 @@ use crate::stata::dta::header_writer::HeaderWriter;
 ///
 /// The writer chain requires `Write + Seek` so that XML `<map>`
 /// offsets can be patched in place once each section's real offset
-/// is known. Writers that do not support seeking can be wrapped in
-/// [`BufferedSeek`](super::buffered_seek::BufferedSeek) at the cost
-/// of buffering the entire file in memory.
+/// is known.
 ///
 /// # Examples
 ///
@@ -61,8 +59,9 @@ impl DtaWriter {
     /// the file cannot be created.
     //noinspection RsSelfConvention
     #[inline]
-    pub fn from_path(self, _path: impl AsRef<Path>) -> Result<HeaderWriter<BufWriter<File>>> {
-        todo!()
+    pub fn from_path(self, path: impl AsRef<Path>) -> Result<HeaderWriter<BufWriter<File>>> {
+        let file = File::create(path).map_err(|e| DtaError::io(Section::Header, e))?;
+        Ok(self.from_file(file))
     }
 
     /// Begins writing a DTA file to a [`File`], wrapping it in a
@@ -70,8 +69,8 @@ impl DtaWriter {
     //noinspection RsSelfConvention
     #[must_use]
     #[inline]
-    pub fn from_file(self, _file: File) -> HeaderWriter<BufWriter<File>> {
-        todo!()
+    pub fn from_file(self, file: File) -> HeaderWriter<BufWriter<File>> {
+        self.from_writer(BufWriter::new(file))
     }
 
     /// Begins writing a DTA file to any `Write + Seek` sink,
@@ -79,8 +78,8 @@ impl DtaWriter {
     //noinspection RsSelfConvention
     #[must_use]
     #[inline]
-    pub fn from_writer<W: Write + Seek>(self, _writer: W) -> HeaderWriter<W> {
-        todo!()
+    pub fn from_writer<W: Write + Seek>(self, writer: W) -> HeaderWriter<W> {
+        HeaderWriter::new(writer, self.encoding)
     }
 }
 

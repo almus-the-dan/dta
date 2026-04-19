@@ -744,7 +744,7 @@ mod tests {
 
         // -- Header --
         let mut buffer = vec![
-            release.number(),
+            release.to_byte(),
             byte_order.to_byte(),
             0x01, // file type
             0x00, // padding
@@ -818,7 +818,7 @@ mod tests {
     ) {
         buffer.extend_from_slice(b"<stata_dta><header>");
         buffer.extend_from_slice(b"<release>");
-        buffer.extend_from_slice(format!("{:03}", release.number()).as_bytes());
+        buffer.extend_from_slice(format!("{:03}", release.to_byte()).as_bytes());
         buffer.extend_from_slice(b"</release>");
         buffer.extend_from_slice(b"<byteorder>");
         buffer.extend_from_slice(byte_order.to_string().as_bytes());
@@ -843,10 +843,10 @@ mod tests {
         buffer.extend_from_slice(b"</N>");
 
         buffer.extend_from_slice(b"<label>");
-        match release.data_label_len_width() {
-            2 => buffer.extend_from_slice(&byte_order.write_u16(0)),
-            1 => buffer.push(0),
-            _ => {}
+        if release.supports_extended_dataset_label() {
+            buffer.extend_from_slice(&byte_order.write_u16(0));
+        } else {
+            buffer.push(0);
         }
         buffer.extend_from_slice(b"</label>");
         buffer.extend_from_slice(b"<timestamp>");
