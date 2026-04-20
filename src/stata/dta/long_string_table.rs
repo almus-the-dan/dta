@@ -16,7 +16,7 @@ use super::long_string_writer::LongStringWriter;
 /// The table dedupes on `(data, binary)` — identical payloads share
 /// a single ref, so repeated strings occupy one strL entry on disk.
 ///
-/// After all records are written and the chain has advanced to
+/// After writing all records and the chain has advanced to
 /// [`LongStringWriter`], iterate the table with [`iter`](Self::iter)
 /// and pass each yielded [`LongString`] to
 /// [`LongStringWriter::write_long_string`].

@@ -4,7 +4,7 @@ use std::io::{BufRead, Seek};
 use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
 use super::header::Header;
-use super::long_string::LongString;
+use super::long_string::{GsoType, LongString};
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
 use super::schema::Schema;
@@ -145,10 +145,12 @@ struct GsoHeader {
 }
 
 impl GsoHeader {
-    const GSO_TYPE_BINARY: u8 = 0x81;
-
     fn is_binary(&self) -> bool {
-        self.gso_type == Self::GSO_TYPE_BINARY
+        // Non-`Binary`/`Text` bytes are treated as text, matching the
+        // previous lenient behavior. Switching to strict rejection of
+        // unknown type bytes is an option if real-world files show
+        // them.
+        GsoType::from_byte(self.gso_type) == Some(GsoType::Binary)
     }
 
     fn variable(&self) -> u32 {

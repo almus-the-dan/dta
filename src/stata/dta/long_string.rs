@@ -2,6 +2,47 @@ use std::borrow::Cow;
 
 use encoding_rs::Encoding;
 
+/// Type byte stored in a GSO block header, classifying the payload
+/// as binary bytes or as text that can be decoded using the file's
+/// encoding.
+///
+/// The DTA spec defines exactly two values:
+/// `0x81` (`Binary`) and `0x82` (`Text`). Other values are not
+/// documented, and [`from_byte`](Self::from_byte) returns `None` for
+/// them — callers decide whether to error or to default-classify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum GsoType {
+    /// Binary payload. Typically, this cannot be decoded as a string.
+    Binary = 0x81,
+    /// Text payload. Decoded with the file's active encoding.
+    Text = 0x82,
+}
+
+impl GsoType {
+    /// Raw byte written to the file.
+    #[must_use]
+    #[inline]
+    pub(crate) fn to_byte(self) -> u8 {
+        // SAFETY: `#[repr(u8)]` guarantees the discriminant fits in
+        // a `u8`. Mirrors the same pattern used by
+        // [`Release::to_byte`](super::release::Release) and
+        // [`ExpansionFieldType::to_byte`](super::characteristic::ExpansionFieldType).
+        self as u8
+    }
+
+    /// Classifies a raw type byte. Returns `None` for values outside
+    /// the two defined by the DTA spec.
+    #[must_use]
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x81 => Some(Self::Binary),
+            0x82 => Some(Self::Text),
+            _ => None,
+        }
+    }
+}
+
 /// A long string (strL / GSO) entry from the DTA file.
 ///
 /// Each entry is keyed by a `(variable, observation)` pair,

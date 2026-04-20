@@ -74,6 +74,9 @@ pub enum Field {
     ObservationCount,
     /// A cell value inside a data record.
     VariableValue,
+    /// The payload length / data bytes of a long-string (strL / GSO)
+    /// entry.
+    LongStringData,
 }
 
 impl fmt::Display for Field {
@@ -96,6 +99,7 @@ impl fmt::Display for Field {
             Self::VariableCount => "variable count",
             Self::ObservationCount => "observation count",
             Self::VariableValue => "variable value",
+            Self::LongStringData => "long-string data",
         })
     }
 }
@@ -263,6 +267,12 @@ pub enum FormatErrorKind {
         /// The release that cannot store characteristics.
         release: Release,
     },
+    /// The target release has no `<strls>` section (pre-V117), so
+    /// `strL` / GSO entries cannot be emitted.
+    LongStringsUnsupported {
+        /// The release that cannot store long strings.
+        release: Release,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -308,6 +318,9 @@ impl fmt::Display for FormatErrorKind {
             ),
             Self::CharacteristicsUnsupported { release } => {
                 write!(f, "format {release} does not support characteristics",)
+            }
+            Self::LongStringsUnsupported { release } => {
+                write!(f, "format {release} does not support long strings",)
             }
             Self::RecordArityMismatch { expected, actual } => write!(
                 f,
