@@ -56,14 +56,6 @@ impl<W> RecordWriter<W> {
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
-
-    /// Consumes the writer and returns the underlying state. Used by
-    /// characteristic-writer round-trip tests that need to recover
-    /// the sink before `into_long_string_writer` is implemented.
-    #[cfg(test)]
-    pub(crate) fn into_state(self) -> WriterState<W> {
-        self.state
-    }
 }
 
 impl<W: Write + Seek> RecordWriter<W> {
@@ -442,10 +434,9 @@ mod tests {
 
     // -- Helpers -------------------------------------------------------------
 
-    /// Writes a schema through the full pipeline up to (and
-    /// through) `into_long_string_writer`, recovers the raw bytes
-    /// via `LongStringWriter::into_state`, then reads them back up
-    /// to the record reader.
+    /// Writes a schema + records through the full pipeline to
+    /// [`ValueLabelWriter::finish`], then reads the resulting bytes
+    /// back up through the record reader.
     fn round_trip<F>(
         release: Release,
         byte_order: ByteOrder,
@@ -464,8 +455,14 @@ mod tests {
             .unwrap();
         let mut record_writer = characteristic_writer.into_record_writer().unwrap();
         write_records(&mut record_writer);
-        let long_string_writer = record_writer.into_long_string_writer().unwrap();
-        long_string_writer.into_state().into_inner().into_inner()
+        record_writer
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner()
     }
 
     /// Reads back a file produced by [`round_trip`] and collects all
@@ -478,6 +475,9 @@ mod tests {
             .unwrap()
             .read_schema()
             .unwrap();
+        let header_n = characteristic_reader.header().observation_count();
+        let header_k = characteristic_reader.header().variable_count();
+        let schema_variable_count = characteristic_reader.schema().variables().len();
         while characteristic_reader
             .read_characteristic()
             .unwrap()
@@ -494,6 +494,20 @@ mod tests {
                 .collect();
             records.push(owned);
         }
+        // The record writer patches the header's N field from the
+        // accumulated row count; the schema writer patches K from
+        // `schema.variables().len()`. Assert both round-trip — every
+        // record_writer test inherits these checks.
+        assert_eq!(
+            u64::try_from(records.len()).expect("record count fits u64"),
+            header_n,
+            "header N field must match the number of rows in the file",
+        );
+        assert_eq!(
+            usize::try_from(header_k).expect("variable count fits usize"),
+            schema_variable_count,
+            "header K field must match schema variable count",
+        );
         records
     }
 
@@ -919,8 +933,14 @@ mod tests {
         );
 
         // And the file must still round-trip with just the one good row.
-        let long_string_writer = writer.into_long_string_writer().unwrap();
-        let bytes = long_string_writer.into_state().into_inner().into_inner();
+        let bytes = writer
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
         let records = read_back(bytes);
         assert_eq!(records.len(), 1);
     }

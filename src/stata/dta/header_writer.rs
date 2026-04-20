@@ -274,19 +274,29 @@ mod tests {
     use super::*;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::schema::Schema;
 
-    /// Writes `header` using the real writer, then reads it back
-    /// with the real reader.
+    /// Writes `header` through the full writer pipeline with an
+    /// empty schema + empty data + empty value labels, then reads
+    /// the file back with the real reader. Returns the round-tripped
+    /// header so each test can assert on the header-only fields it
+    /// cares about (release, byte order, label, timestamp).
     fn round_trip(header: &Header) -> Header {
-        let buffer = Cursor::new(Vec::<u8>::new());
-        let inner = DtaWriter::new()
-            .from_writer(buffer)
+        let bytes = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header.clone())
-            .unwrap();
-        // Recover the underlying Cursor<Vec<u8>> via the state —
-        // SchemaWriter doesn't yet expose an inner accessor, but
-        // WriterState::into_inner is crate-visible through the field.
-        let bytes = inner.into_state().into_inner().into_inner();
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .unwrap()
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
         DtaReader::new()
             .from_reader(Cursor::new(bytes))
             .read_header()
@@ -416,13 +426,22 @@ mod tests {
         let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
             .dataset_label("日本語")
             .build();
-        let schema_writer = DtaWriter::new()
+        let bytes = DtaWriter::new()
             .encoding(encoding_rs::UTF_8)
             .from_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
-            .unwrap();
-        // Recover bytes and read them back with the same override.
-        let bytes = schema_writer.into_state().into_inner().into_inner();
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .unwrap()
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
         let parsed = DtaReader::new()
             .encoding(encoding_rs::UTF_8)
             .from_reader(Cursor::new(bytes))

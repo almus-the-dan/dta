@@ -38,14 +38,6 @@ impl<W> SchemaWriter<W> {
     pub fn header(&self) -> &Header {
         &self.header
     }
-
-    /// Consumes the writer and returns the underlying state, used by
-    /// tests that want to recover the sink before `write_schema` is
-    /// implemented.
-    #[cfg(test)]
-    pub(crate) fn into_state(self) -> WriterState<W> {
-        self.state
-    }
 }
 
 impl<W: Write + Seek> SchemaWriter<W> {
@@ -350,17 +342,42 @@ mod tests {
             .unwrap()
             .write_schema(schema)
             .unwrap();
-        let bytes = characteristic_writer.into_state().into_inner().into_inner();
+        let bytes = characteristic_writer
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
 
         let header_reader = DtaReader::new()
             .from_reader(Cursor::new(bytes))
             .read_header()
             .unwrap();
         let schema_reader = header_reader.read_schema().unwrap();
-        (
-            schema_reader.header().clone(),
-            schema_reader.schema().clone(),
-        )
+        let parsed_header = schema_reader.header().clone();
+        let parsed_schema = schema_reader.schema().clone();
+        // The schema writer patches the header's K (variable count)
+        // from `schema.variables().len()`. Assert the round-trip
+        // preserves that invariant — every schema_writer test
+        // inherits this check.
+        let expected_k =
+            u32::try_from(parsed_schema.variables().len()).expect("variable count fits u32");
+        assert_eq!(
+            parsed_header.variable_count(),
+            expected_k,
+            "header K field must match schema variable count after round-trip",
+        );
+        // No records were written, so N must be zero.
+        assert_eq!(
+            parsed_header.observation_count(),
+            0,
+            "header N field must be zero when no records were written",
+        );
+        (parsed_header, parsed_schema)
     }
 
     /// Creates a minimal header that matches `schema.variables().len()`.

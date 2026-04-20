@@ -58,14 +58,6 @@ impl<W> LongStringWriter<W> {
     pub(crate) fn encoding(&self) -> &'static encoding_rs::Encoding {
         self.state.encoding()
     }
-
-    /// Consumes the writer and returns the underlying state. Used by
-    /// record-writer round-trip tests that need to recover the sink
-    /// before `into_value_label_writer` is implemented.
-    #[cfg(test)]
-    pub(crate) fn into_state(self) -> WriterState<W> {
-        self.state
-    }
 }
 
 /// GSO block magic bytes — exactly these three ASCII bytes open every
@@ -275,8 +267,12 @@ mod tests {
         let record_writer = characteristic_writer.into_record_writer().unwrap();
         let mut long_string_writer = record_writer.into_long_string_writer().unwrap();
         write_fn(&mut long_string_writer).unwrap();
-        let value_label_writer = long_string_writer.into_value_label_writer().unwrap();
-        value_label_writer.into_state().into_inner().into_inner()
+        long_string_writer
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner()
     }
 
     /// Reads a file produced by [`round_trip`] back through the

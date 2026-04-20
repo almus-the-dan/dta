@@ -56,9 +56,15 @@ impl<W> CharacteristicWriter<W> {
         &self.schema
     }
 
-    /// Consumes the writer and returns the underlying state. Used by
-    /// schema-writer round-trip tests that need to recover the sink
-    /// before the remaining writer phases are implemented.
+    /// Consumes the writer and returns the underlying state. Used
+    /// exclusively by `characteristic_reader` tests that need a
+    /// partially written file — they drive the writer up through
+    /// `write_schema` and then append hand-crafted expansion-field
+    /// bytes (e.g., unknown `data_type` values the writer would never
+    /// emit on its own) to exercise the reader's forward-compat
+    /// skipping logic. All other test paths now chain through
+    /// [`ValueLabelWriter::finish`](super::value_label_writer::ValueLabelWriter::finish)
+    /// instead.
     #[cfg(test)]
     pub(crate) fn into_state(self) -> WriterState<W> {
         self.state
@@ -345,8 +351,16 @@ mod tests {
         for entry in characteristics {
             characteristic_writer.write_characteristic(entry).unwrap();
         }
-        let record_writer = characteristic_writer.into_record_writer().unwrap();
-        let bytes = record_writer.into_state().into_inner().into_inner();
+        let bytes = characteristic_writer
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
 
         let mut reader = DtaReader::new()
             .from_reader(Cursor::new(bytes))

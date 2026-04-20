@@ -48,14 +48,6 @@ impl<W> ValueLabelWriter<W> {
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
-
-    /// Consumes the writer and returns the underlying state. Used by
-    /// long-string-writer round-trip tests that need to recover the
-    /// sink before `finish` is implemented.
-    #[cfg(test)]
-    pub(crate) fn into_state(self) -> WriterState<W> {
-        self.state
-    }
 }
 
 /// Maximum value that fits in the V104 legacy layout. Each slot is
@@ -808,5 +800,237 @@ mod tests {
                 FormatErrorKind::InvalidEncoding { field: Field::ValueLabelEntry }
             )
         ));
+    }
+
+    // -- XML <map> offset validation ---------------------------------------
+
+    /// Writes a fully populated XML DTA file: two-variable schema
+    /// (one `Byte`, one `LongString`), one dataset-level
+    /// characteristic, one record, one `strL` payload, one
+    /// value-label table. Shared by the seek-navigation and direct
+    /// map-inspection tests.
+    fn build_populated_xml_file(release: Release, byte_order: ByteOrder) -> Vec<u8> {
+        use crate::stata::dta::characteristic::{Characteristic, CharacteristicTarget};
+        use crate::stata::dta::long_string_table::LongStringTable;
+        use crate::stata::dta::value::Value;
+        use crate::stata::stata_byte::StataByte;
+
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
+            .add_variable(Variable::builder(VariableType::LongString, "note").format("%9s"))
+            .build()
+            .unwrap();
+        let header = Header::builder(release, byte_order).build();
+
+        let mut long_strings = LongStringTable::new();
+        let ls_ref = long_strings.get_or_insert(2, 1, b"hello strL", false);
+
+        let value_label_table =
+            ValueLabelTable::new("lbl".to_owned(), entries(&[(0, "zero"), (1, "one")]));
+
+        let characteristic = Characteristic::new(
+            CharacteristicTarget::Dataset,
+            "note1".to_owned(),
+            "map-offset test".to_owned(),
+        );
+
+        let mut characteristic_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap();
+        characteristic_writer
+            .write_characteristic(&characteristic)
+            .unwrap();
+        let mut record_writer = characteristic_writer.into_record_writer().unwrap();
+        record_writer
+            .write_record(&[
+                Value::Byte(StataByte::Present(1)),
+                Value::LongStringRef(ls_ref),
+            ])
+            .unwrap();
+        let mut long_string_writer = record_writer.into_long_string_writer().unwrap();
+        long_string_writer
+            .write_long_string_table(&long_strings)
+            .unwrap();
+        let mut value_label_writer = long_string_writer.into_value_label_writer().unwrap();
+        value_label_writer
+            .write_value_label_table(&value_label_table)
+            .unwrap();
+        value_label_writer.finish().unwrap().into_inner()
+    }
+
+    /// Drives the reader's `seek_*` methods over a populated file.
+    /// Each seek consumes a map slot; a wrong slot would make the
+    /// subsequent `read_*` land on garbage and fail.
+    fn assert_seek_navigation_exercises_map(bytes: Vec<u8>) {
+        let characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+
+        // Slot 9: <data>.
+        let mut record_reader = characteristic_reader.seek_records().unwrap();
+        let first_record = record_reader.read_record().unwrap().unwrap();
+        assert_eq!(first_record.values().len(), 2);
+
+        // Slot 10: <strls>.
+        let mut long_string_reader = record_reader.seek_long_strings().unwrap();
+        let parsed_ls = long_string_reader.read_long_string().unwrap().unwrap();
+        assert_eq!(parsed_ls.data(), b"hello strL");
+
+        // Slot 11: <value_labels>.
+        let mut value_label_reader = long_string_reader.seek_value_labels().unwrap();
+        let parsed_table = value_label_reader
+            .read_value_label_table()
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed_table.name(), "lbl");
+        assert_eq!(parsed_table.entries().len(), 2);
+
+        // Slot 8: <characteristics>. Seek back from the value-label
+        // reader — this is the only place that consumes slot 8
+        // (sequential reading reaches characteristics naturally from
+        // the schema's current position).
+        let mut characteristic_reader = value_label_reader.seek_characteristics().unwrap();
+        let parsed_char = characteristic_reader
+            .read_characteristic()
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed_char.name(), "note1");
+        assert_eq!(parsed_char.value(), "map-offset test");
+    }
+
+    #[test]
+    fn xml_v117_map_offsets_via_seek_navigation() {
+        let bytes = build_populated_xml_file(Release::V117, ByteOrder::LittleEndian);
+        assert_seek_navigation_exercises_map(bytes);
+    }
+
+    #[test]
+    fn xml_v118_map_offsets_via_seek_navigation() {
+        // V118 uses u16+u48 for data-section strL refs, u32+u64 for
+        // GSO observation, u64 for the header N field, and UTF-8 for
+        // strings. Different wire layouts than V117 — seek navigation
+        // exercises the same four map slots against the different
+        // encoding to prove the writer and reader agree for V118.
+        let bytes = build_populated_xml_file(Release::V118, ByteOrder::LittleEndian);
+        assert_seek_navigation_exercises_map(bytes);
+    }
+
+    #[test]
+    fn xml_v119_map_offsets_via_seek_navigation_big_endian() {
+        // V119 + big endian — widest variable-count field (u32 K)
+        // combined with the reverse byte order. Nothing special
+        // happens structurally, but an extra pass through the
+        // endian-swap code paths is cheap insurance.
+        let bytes = build_populated_xml_file(Release::V119, ByteOrder::BigEndian);
+        assert_seek_navigation_exercises_map(bytes);
+    }
+
+    /// Scans a byte buffer for a literal needle and returns its
+    /// starting position. Used by the direct-inspection test to
+    /// locate the `<map>` tag without depending on the writer's
+    /// exact header byte layout.
+    fn find_tag(bytes: &[u8], needle: &[u8]) -> usize {
+        bytes
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .unwrap_or_else(|| panic!("{:?} not found in file", std::str::from_utf8(needle)))
+    }
+
+    /// Reads the 14 `u64` map slots starting at `payload_start`.
+    fn read_map_slots(bytes: &[u8], payload_start: usize, byte_order: ByteOrder) -> [u64; 14] {
+        let mut slots = [0u64; 14];
+        for (index, slot) in slots.iter_mut().enumerate() {
+            let start = payload_start + index * 8;
+            *slot = byte_order.read_u64([
+                bytes[start],
+                bytes[start + 1],
+                bytes[start + 2],
+                bytes[start + 3],
+                bytes[start + 4],
+                bytes[start + 5],
+                bytes[start + 6],
+                bytes[start + 7],
+            ]);
+        }
+        slots
+    }
+
+    /// Asserts that the bytes at `offset` start with `expected_tag`.
+    fn assert_tag_at(bytes: &[u8], offset: u64, expected_tag: &[u8], slot: usize) {
+        let offset_usize = usize::try_from(offset)
+            .unwrap_or_else(|_| panic!("map slot {slot} offset {offset} exceeds usize"));
+        assert!(
+            bytes[offset_usize..].starts_with(expected_tag),
+            "map slot {slot} at offset {offset} should start with {:?}, got {:?}",
+            std::str::from_utf8(expected_tag).unwrap(),
+            std::str::from_utf8(
+                &bytes[offset_usize..(offset_usize + expected_tag.len()).min(bytes.len())]
+            )
+            .unwrap_or("<non-utf8>"),
+        );
+    }
+
+    /// Belt-and-suspenders: parse the `<map>` payload directly from
+    /// the finished file and verify every one of the 14 slots
+    /// points at the expected tag (or, for slot 13, at end-of-file).
+    /// `seek_*` navigation already covers slots 8–11 in the other
+    /// tests; this one also covers slots 0–7 and 12–13, which no
+    /// reader API consumes today.
+    #[test]
+    fn xml_v117_map_slots_point_at_expected_tags() {
+        let bytes = build_populated_xml_file(Release::V117, ByteOrder::LittleEndian);
+        let byte_order = ByteOrder::LittleEndian;
+
+        // Locate <map> (don't trust the writer's exact header length).
+        let map_tag_start = find_tag(&bytes, b"<map>");
+        let payload_start = map_tag_start + b"<map>".len();
+        let slots = read_map_slots(&bytes, payload_start, byte_order);
+
+        // Slot 0: <stata_dta> at byte 0.
+        assert_eq!(slots[0], 0, "slot 0 should be the <stata_dta> offset (0)");
+        assert_tag_at(&bytes, slots[0], b"<stata_dta>", 0);
+
+        // Slot 1: <map> position we already located.
+        assert_eq!(
+            slots[1],
+            u64::try_from(map_tag_start).unwrap(),
+            "slot 1 should match the scanned <map> position",
+        );
+        assert_tag_at(&bytes, slots[1], b"<map>", 1);
+
+        // Slots 2–11: descriptor sub-sections + post-schema sections.
+        let expected: [(usize, &[u8]); 10] = [
+            (2, b"<variable_types>"),
+            (3, b"<varnames>"),
+            (4, b"<sortlist>"),
+            (5, b"<formats>"),
+            (6, b"<value_label_names>"),
+            (7, b"<variable_labels>"),
+            (8, b"<characteristics>"),
+            (9, b"<data>"),
+            (10, b"<strls>"),
+            (11, b"<value_labels>"),
+        ];
+        for (slot, tag) in expected {
+            assert_tag_at(&bytes, slots[slot], tag, slot);
+        }
+
+        // Slot 12: </stata_dta> close tag.
+        assert_tag_at(&bytes, slots[12], b"</stata_dta>", 12);
+
+        // Slot 13: EOF. The writer sets this to the position right
+        // after </stata_dta> — which for the current layout equals
+        // `bytes.len()` since nothing follows.
+        assert_eq!(
+            slots[13],
+            u64::try_from(bytes.len()).unwrap(),
+            "slot 13 should mark EOF",
+        );
     }
 }
