@@ -133,7 +133,11 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
                 Field::DatasetLabel,
             )
             .await?;
-        let timestamp = self.read_fixed_timestamp(release.timestamp_len()).await?;
+        let timestamp = if let Some(len) = release.timestamp_len() {
+            self.read_fixed_timestamp(len).await?
+        } else {
+            None
+        };
         Ok((dataset_label, timestamp))
     }
 }
@@ -263,7 +267,11 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
             )
             .await?;
         let timestamp_len = usize::from(self.state.read_u8(Section::Header).await?);
-        let timestamp = self.read_fixed_timestamp(timestamp_len).await?;
+        let timestamp = if timestamp_len == 0 {
+            None
+        } else {
+            self.read_fixed_timestamp(timestamp_len).await?
+        };
         self.state
             .expect_bytes(
                 b"</timestamp>",
@@ -300,10 +308,12 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
+    /// Reads a `len`-byte fixed-width timestamp field and parses it.
+    /// Returns `None` when the bytes contain no parseable timestamp
+    /// (empty or zero-filled). Callers that know the field is absent
+    /// (V104 binary, or an XML `<timestamp>` with a `0` length
+    /// prefix) should not call this.
     async fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
-        if len == 0 {
-            return Ok(None);
-        }
         let buffer = self.state.read_exact(len, Section::Header).await?;
         Ok(parse_fixed_timestamp(buffer))
     }

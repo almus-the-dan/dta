@@ -105,7 +105,9 @@ impl<W: Write> HeaderWriter<W> {
             Field::DatasetLabel,
         )?;
 
-        self.write_fixed_timestamp(header.timestamp(), release.timestamp_len())?;
+        if let Some(len) = release.timestamp_len() {
+            self.write_fixed_timestamp(header.timestamp(), len)?;
+        }
         Ok(())
     }
 }
@@ -235,9 +237,6 @@ impl<W: Write> HeaderWriter<W> {
         timestamp: Option<&StataTimestamp>,
         len: usize,
     ) -> Result<()> {
-        if len == 0 {
-            return Ok(());
-        }
         let formatted = format_timestamp(timestamp);
         self.state
             .write_fixed_string(&formatted, len, Section::Header, Field::Timestamp)

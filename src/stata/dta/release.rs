@@ -150,11 +150,12 @@ impl Release {
 
     /// Fixed-length timestamp field size for binary formats.
     ///
-    /// Returns 0 for format 104 (no timestamp) and 18 for 105–116.
-    /// For XML formats, the timestamp has a 1-byte length prefix.
+    /// Returns `None` for format 104 (no timestamp at all) and
+    /// `Some(18)` for 105–116. For XML formats, the timestamp has a
+    /// 1-byte length prefix, and this method is not consulted.
     #[must_use]
-    pub(crate) fn timestamp_len(self) -> usize {
-        if self < Self::V105 { 0 } else { 18 }
+    pub(crate) fn timestamp_len(self) -> Option<usize> {
+        if self < Self::V105 { None } else { Some(18) }
     }
 
     /// Whether the variable count is stored as `u32` (format 119).
@@ -396,13 +397,13 @@ mod tests {
 
     #[test]
     fn timestamp_len_v104() {
-        assert_eq!(Release::V104.timestamp_len(), 0);
+        assert_eq!(Release::V104.timestamp_len(), None);
     }
 
     #[test]
     fn timestamp_len_v105_plus() {
-        assert_eq!(Release::V105.timestamp_len(), 18);
-        assert_eq!(Release::V116.timestamp_len(), 18);
+        assert_eq!(Release::V105.timestamp_len(), Some(18));
+        assert_eq!(Release::V116.timestamp_len(), Some(18));
     }
 
     // -- supports_long_variable_count ----------------------------------------
