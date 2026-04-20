@@ -490,6 +490,7 @@ mod tests {
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_error::DtaError;
     use crate::stata::dta::dta_reader::DtaReader;
+    use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;
 
     // -- parse_type_code unit tests ------------------------------------------
@@ -678,50 +679,6 @@ mod tests {
 
     // -- Test file serialization helpers -------------------------------------
 
-    /// Writes a null-padded fixed-length string field.
-    fn write_fixed(buf: &mut Vec<u8>, s: &str, len: usize) {
-        let bytes = s.as_bytes();
-        let mut field = vec![0u8; len];
-        field[..bytes.len()].copy_from_slice(bytes);
-        buf.extend_from_slice(&field);
-    }
-
-    /// Converts a [`VariableType`] to a raw type code for the given
-    /// release, for test serialization.
-    fn type_to_code(variable_type: VariableType, release: Release) -> u16 {
-        if release >= Release::V117 {
-            match variable_type {
-                VariableType::Byte => 0xFFFA,
-                VariableType::Int => 0xFFF9,
-                VariableType::Long => 0xFFF8,
-                VariableType::Float => 0xFFF7,
-                VariableType::Double => 0xFFF6,
-                VariableType::LongString => 0x8000,
-                VariableType::FixedString(len) => len,
-            }
-        } else if release >= Release::V111 {
-            match variable_type {
-                VariableType::Byte => 0xFB,
-                VariableType::Int => 0xFC,
-                VariableType::Long => 0xFD,
-                VariableType::Float => 0xFE,
-                VariableType::Double => 0xFF,
-                VariableType::FixedString(len) => len,
-                VariableType::LongString => panic!("strL unavailable before v117"),
-            }
-        } else {
-            match variable_type {
-                VariableType::Byte => u16::from(b'b'),
-                VariableType::Int => u16::from(b'i'),
-                VariableType::Long => u16::from(b'l'),
-                VariableType::Float => u16::from(b'f'),
-                VariableType::Double => u16::from(b'd'),
-                VariableType::FixedString(len) => len + 0x7F,
-                VariableType::LongString => panic!("strL unavailable before v117"),
-            }
-        }
-    }
-
     /// Describes a test variable for serialization.
     struct TestVariable {
         variable_type: VariableType,
@@ -731,227 +688,53 @@ mod tests {
         label: &'static str,
     }
 
-    /// Serializes a complete binary DTA file (formats 104–116)
-    /// consisting of a header, schema descriptors, and expansion
-    /// terminator.
-    fn serialize_binary_file(
+    /// Serializes a complete DTA file (binary or XML) by running the
+    /// given variables + sort order through the full writer pipeline.
+    /// The file ends with the characteristics-terminator (binary) or
+    /// the `</stata_dta>` close tag (XML) — no records, no strLs, no
+    /// value labels.
+    ///
+    /// Used by every round-trip test in this module. The two
+    /// expansion-field tests splice raw bytes in before the
+    /// terminator and rely on the writer's output ending with the
+    /// same `u8 data_type + u16/u32 length` terminator the hand-
+    /// crafted helper used to emit.
+    fn serialize_file(
         release: Release,
         byte_order: ByteOrder,
         variables: &[TestVariable],
         sort_order: &[u32],
     ) -> Vec<u8> {
-        let variable_count = u16::try_from(variables.len()).unwrap();
-
-        // -- Header --
-        let mut buffer = vec![
-            release.to_byte(),
-            byte_order.to_byte(),
-            0x01, // file type
-            0x00, // padding
-        ];
-
-        buffer.extend_from_slice(&byte_order.write_u16(variable_count));
-        buffer.extend_from_slice(&byte_order.write_u32(0));
-        write_fixed(&mut buffer, "", release.dataset_label_len());
-        if release.has_timestamp() {
-            write_fixed(&mut buffer, "", release.timestamp_len());
-        }
-
-        // -- Type list --
-        for variable in variables {
-            let code = type_to_code(variable.variable_type, release);
-            buffer.push(u8::try_from(code).unwrap());
-        }
-
-        // -- Variable list --
-        for variable in variables {
-            write_fixed(&mut buffer, variable.name, release.variable_name_len());
-        }
-
-        // -- Sort list --
-        let sort_entry_len = release.sort_entry_len();
-        for index in 0..=usize::from(variable_count) {
-            let index: u32 = sort_order.get(index).map_or(0, |idx| idx + 1);
-            let index = u16::try_from(index).unwrap();
-            buffer.extend_from_slice(&byte_order.write_u16(index));
-            // Pad to entry_len if it's 4 bytes (only v119, which is XML)
-            if sort_entry_len == 4 {
-                buffer.extend_from_slice(&[0, 0]);
-            }
-        }
-
-        // -- Format list --
-        for variable in variables {
-            write_fixed(&mut buffer, variable.format, release.format_entry_len());
-        }
-
-        // -- Label list --
-        for variable in variables {
-            write_fixed(
-                &mut buffer,
-                variable.value_label_name,
-                release.value_label_name_len(),
-            );
-        }
-
-        // -- Variable labels --
-        for variable in variables {
-            write_fixed(&mut buffer, variable.label, release.variable_label_len());
-        }
-
-        // -- Expansion field terminator --
-        if let Some(is_extended) = release.supports_extended_expansion() {
-            buffer.push(0); // data_type = 0
-            if is_extended {
-                buffer.extend_from_slice(&[0u8; 4]); // u32 length = 0
-            } else {
-                buffer.extend_from_slice(&[0u8; 2]); // u16 length = 0
-            }
-        }
-
-        buffer
-    }
-
-    /// Serializes an XML DTA header (formats 117–119) into a buffer.
-    fn serialize_xml_header(
-        buffer: &mut Vec<u8>,
-        release: Release,
-        byte_order: ByteOrder,
-        variable_count: usize,
-    ) {
-        buffer.extend_from_slice(b"<stata_dta><header>");
-        buffer.extend_from_slice(b"<release>");
-        buffer.extend_from_slice(format!("{:03}", release.to_byte()).as_bytes());
-        buffer.extend_from_slice(b"</release>");
-        buffer.extend_from_slice(b"<byteorder>");
-        buffer.extend_from_slice(byte_order.to_string().as_bytes());
-        buffer.extend_from_slice(b"</byteorder>");
-
-        buffer.extend_from_slice(b"<K>");
-        if release.supports_extended_variable_count() {
-            let variable_count_u32 = u32::try_from(variable_count).unwrap();
-            buffer.extend_from_slice(&byte_order.write_u32(variable_count_u32));
-        } else {
-            let variable_count_u16 = u16::try_from(variable_count).unwrap();
-            buffer.extend_from_slice(&byte_order.write_u16(variable_count_u16));
-        }
-        buffer.extend_from_slice(b"</K>");
-
-        buffer.extend_from_slice(b"<N>");
-        if release.supports_extended_observation_count() {
-            buffer.extend_from_slice(&byte_order.write_u64(0));
-        } else {
-            buffer.extend_from_slice(&byte_order.write_u32(0));
-        }
-        buffer.extend_from_slice(b"</N>");
-
-        buffer.extend_from_slice(b"<label>");
-        if release.supports_extended_dataset_label() {
-            buffer.extend_from_slice(&byte_order.write_u16(0));
-        } else {
-            buffer.push(0);
-        }
-        buffer.extend_from_slice(b"</label>");
-        buffer.extend_from_slice(b"<timestamp>");
-        buffer.push(0);
-        buffer.extend_from_slice(b"</timestamp>");
-        buffer.extend_from_slice(b"</header>");
-    }
-
-    /// Serializes an XML schema (section map, descriptors,
-    /// characteristics) into a buffer that already contains a header.
-    fn serialize_xml_schema(
-        buffer: &mut Vec<u8>,
-        release: Release,
-        byte_order: ByteOrder,
-        variables: &[TestVariable],
-        sort_order: &[u32],
-    ) {
-        let variable_count = variables.len();
-
-        // -- Map (placeholder for data_offset at index 9) --
-        buffer.extend_from_slice(b"<map>");
-        let map_data_start = buffer.len();
-        buffer.extend_from_slice(&[0u8; 14 * 8]);
-        buffer.extend_from_slice(b"</map>");
-
-        // -- Variable types --
-        buffer.extend_from_slice(b"<variable_types>");
-        for variable in variables {
-            let code = type_to_code(variable.variable_type, release);
-            buffer.extend_from_slice(&byte_order.write_u16(code));
-        }
-        buffer.extend_from_slice(b"</variable_types>");
-
-        // -- Variable names --
-        buffer.extend_from_slice(b"<varnames>");
-        for v in variables {
-            write_fixed(buffer, v.name, release.variable_name_len());
-        }
-        buffer.extend_from_slice(b"</varnames>");
-
-        // -- Sort list --
-        buffer.extend_from_slice(b"<sortlist>");
-        let sort_entry_len = release.sort_entry_len();
-        for index in 0..=variable_count {
-            let index: u32 = sort_order.get(index).map_or(0, |idx| idx + 1);
-            if sort_entry_len == 2 {
-                let index_u16 = u16::try_from(index).unwrap();
-                buffer.extend_from_slice(&byte_order.write_u16(index_u16));
-            } else {
-                buffer.extend_from_slice(&byte_order.write_u32(index));
-            }
-        }
-        buffer.extend_from_slice(b"</sortlist>");
-
-        // -- Formats --
-        buffer.extend_from_slice(b"<formats>");
-        for variable in variables {
-            write_fixed(buffer, variable.format, release.format_entry_len());
-        }
-        buffer.extend_from_slice(b"</formats>");
-
-        // -- Value label names --
-        buffer.extend_from_slice(b"<value_label_names>");
-        for variable in variables {
-            write_fixed(
-                buffer,
-                variable.value_label_name,
-                release.value_label_name_len(),
-            );
-        }
-        buffer.extend_from_slice(b"</value_label_names>");
-
-        // -- Variable labels --
-        buffer.extend_from_slice(b"<variable_labels>");
-        for variable in variables {
-            write_fixed(buffer, variable.label, release.variable_label_len());
-        }
-        buffer.extend_from_slice(b"</variable_labels>");
-
-        // -- Empty characteristics --
-        buffer.extend_from_slice(b"<characteristics>");
-        buffer.extend_from_slice(b"</characteristics>");
-
-        // Patch data_offset at map index 9
-        let data_offset = u64::try_from(buffer.len()).unwrap();
-        let offset_bytes = byte_order.write_u64(data_offset);
-        buffer[map_data_start + 9 * 8..map_data_start + 10 * 8].copy_from_slice(&offset_bytes);
-    }
-
-    /// Serializes a complete XML DTA file (formats 117–119) consisting
-    /// of a header, section map, schema descriptors, and an empty
-    /// characteristics section.
-    fn serialize_xml_file(
-        release: Release,
-        byte_order: ByteOrder,
-        variables: &[TestVariable],
-        sort_order: &[u32],
-    ) -> Vec<u8> {
-        let mut buffer = Vec::new();
-        serialize_xml_header(&mut buffer, release, byte_order, variables.len());
-        serialize_xml_schema(&mut buffer, release, byte_order, variables, sort_order);
-        buffer
+        let header = Header::builder(release, byte_order).build();
+        let variable_builders: Vec<_> = variables
+            .iter()
+            .map(|v| {
+                Variable::builder(v.variable_type, v.name)
+                    .format(v.format)
+                    .value_label_name(v.value_label_name)
+                    .label(v.label)
+            })
+            .collect();
+        let schema = Schema::builder()
+            .variables(variable_builders)
+            .sort_order(sort_order.to_vec())
+            .build()
+            .unwrap();
+        DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap()
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner()
     }
 
     /// Parses a schema from serialized bytes using default options.
@@ -993,7 +776,7 @@ mod tests {
                 label: "Price in USD",
             },
         ];
-        let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         assert_eq!(schema.variables().len(), 3);
@@ -1029,7 +812,7 @@ mod tests {
             label: "",
         };
         let variables = [id_variable];
-        let data = serialize_binary_file(Release::V114, ByteOrder::BigEndian, &variables, &[]);
+        let data = serialize_file(Release::V114, ByteOrder::BigEndian, &variables, &[]);
         let schema = read_schema(data);
 
         assert_eq!(schema.variables().len(), 1);
@@ -1055,7 +838,7 @@ mod tests {
             label: "B",
         };
         let expected_variables = [variable_a, variable_b];
-        let data = serialize_binary_file(
+        let data = serialize_file(
             Release::V104,
             ByteOrder::LittleEndian,
             &expected_variables,
@@ -1100,8 +883,7 @@ mod tests {
         };
         let variables = [variable_a, variable_b, variable_c];
         // Sort by c (index 2) then a (index 0)
-        let data =
-            serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[2, 0]);
+        let data = serialize_file(Release::V114, ByteOrder::LittleEndian, &variables, &[2, 0]);
         let schema = read_schema(data);
 
         assert_eq!(schema.sort_order(), &[2, 0]);
@@ -1117,14 +899,14 @@ mod tests {
             label: "",
         };
         let variables = [variable];
-        let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
         assert!(schema.sort_order().is_empty());
     }
 
     #[test]
     fn binary_v114_zero_variables() {
-        let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &[], &[]);
+        let data = serialize_file(Release::V114, ByteOrder::LittleEndian, &[], &[]);
         let schema = read_schema(data);
 
         assert!(schema.variables().is_empty());
@@ -1170,7 +952,7 @@ mod tests {
             label: "",
         };
         let variables = [variable_a, variable_b, variable_c, variable_d, variable_e];
-        let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V114, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         let actual_variables = schema.variables();
@@ -1198,7 +980,7 @@ mod tests {
             label: "Temperature",
         };
         let variables = [variable];
-        let data = serialize_binary_file(Release::V105, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V105, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         let actual_variables = schema.variables();
@@ -1228,7 +1010,7 @@ mod tests {
             label: "Notes field",
         };
         let variables = [count, notes];
-        let data = serialize_xml_file(Release::V117, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V117, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         let actual_variables = schema.variables();
@@ -1283,7 +1065,7 @@ mod tests {
             label: "",
         };
         let variables = [variable_a, variable_b, variable_c, variable_d, variable_e];
-        let data = serialize_xml_file(Release::V118, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V118, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         assert_eq!(schema.row_len(), 1 + 2 + 4 + 4 + 8);
@@ -1305,7 +1087,7 @@ mod tests {
             label: "Value",
         };
         let variables = [variable];
-        let data = serialize_xml_file(Release::V117, ByteOrder::BigEndian, &variables, &[]);
+        let data = serialize_file(Release::V117, ByteOrder::BigEndian, &variables, &[]);
         let schema = read_schema(data);
 
         let actual_variables = schema.variables();
@@ -1332,14 +1114,14 @@ mod tests {
             label: "",
         };
         let variables = [variable_a, variable_b];
-        let data = serialize_xml_file(Release::V117, ByteOrder::LittleEndian, &variables, &[1, 0]);
+        let data = serialize_file(Release::V117, ByteOrder::LittleEndian, &variables, &[1, 0]);
         let schema = read_schema(data);
         assert_eq!(schema.sort_order(), &[1, 0]);
     }
 
     #[test]
     fn xml_v117_zero_variables() {
-        let data = serialize_xml_file(Release::V117, ByteOrder::LittleEndian, &[], &[]);
+        let data = serialize_file(Release::V117, ByteOrder::LittleEndian, &[], &[]);
         let schema = read_schema(data);
 
         assert!(schema.variables().is_empty());
@@ -1356,7 +1138,7 @@ mod tests {
             label: "City",
         };
         let variables = [city];
-        let data = serialize_xml_file(Release::V117, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V117, ByteOrder::LittleEndian, &variables, &[]);
         let schema = read_schema(data);
 
         let actual_variables = schema.variables();
@@ -1380,7 +1162,7 @@ mod tests {
             label: "",
         };
         let variables = [variable];
-        let data = serialize_binary_file(Release::V110, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V110, ByteOrder::LittleEndian, &variables, &[]);
 
         // The last 5 bytes are the terminator (type=0, len=0 as u32).
         // Insert an expansion entry before it.
@@ -1408,7 +1190,7 @@ mod tests {
             label: "",
         };
         let variables = [variable];
-        let data = serialize_binary_file(Release::V106, ByteOrder::LittleEndian, &variables, &[]);
+        let data = serialize_file(Release::V106, ByteOrder::LittleEndian, &variables, &[]);
 
         // Insert an expansion entry before the terminator (last 3 bytes).
         let terminator_start = data.len() - 3;
@@ -1502,16 +1284,44 @@ mod tests {
 
     #[test]
     fn binary_sort_order_out_of_bounds_returns_error() {
-        let variable = TestVariable {
-            variable_type: VariableType::Byte,
-            name: "a",
-            format: "%9.0g",
-            value_label_name: "",
-            label: "",
-        };
-        let variables = [variable];
-        // Sort order index 5 is out of bounds for 1 variable
-        let data = serialize_binary_file(Release::V114, ByteOrder::LittleEndian, &variables, &[5]);
+        // `Schema::builder` rejects an out-of-bounds sort entry at
+        // build time, so the writer can't produce this file. Hand-
+        // craft the bytes to verify the reader catches the same
+        // invariant when parsing raw input.
+        let release = Release::V114;
+        let byte_order = ByteOrder::LittleEndian;
+        let mut data = vec![
+            release.to_byte(),
+            byte_order.to_byte(),
+            0x01, // filetype
+            0x00, // padding
+        ];
+        // Header: K=1, N=0, 81-byte label, 18-byte timestamp.
+        data.extend_from_slice(&byte_order.write_u16(1));
+        data.extend_from_slice(&byte_order.write_u32(0));
+        data.extend_from_slice(&[0u8; 81]);
+        data.extend_from_slice(&[0u8; 18]);
+        // Type list: single Byte variable (0xFB for V111+).
+        data.push(0xFB);
+        // Variable name list: "a" in 33 null-padded bytes.
+        let mut name = [0u8; 33];
+        name[0] = b'a';
+        data.extend_from_slice(&name);
+        // Sort list: (variable_count + 1) = 2 entries. Deliberately
+        // out-of-bounds: 6 (1-based) = 5 (0-based), then terminator 0.
+        data.extend_from_slice(&byte_order.write_u16(6));
+        data.extend_from_slice(&byte_order.write_u16(0));
+        // Format list: "%9.0g" in 49 null-padded bytes.
+        let mut format = [0u8; 49];
+        format[..5].copy_from_slice(b"%9.0g");
+        data.extend_from_slice(&format);
+        // Value-label names list (1 × 33 empty).
+        data.extend_from_slice(&[0u8; 33]);
+        // Variable labels (1 × 81 empty).
+        data.extend_from_slice(&[0u8; 81]);
+        // Expansion-field terminator: data_type=0 + u32 length=0.
+        data.extend_from_slice(&[0u8; 5]);
+
         let error = DtaReader::default()
             .from_reader(Cursor::new(data))
             .read_header()

@@ -360,6 +360,7 @@ mod tests {
 
     use super::*;
     use crate::stata::dta::dta_reader::DtaReader;
+    use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;
 
     // -- ascii_digits_to_u8 --------------------------------------------------
@@ -386,41 +387,46 @@ mod tests {
 
     // -- Test serialization helpers ------------------------------------------
 
-    /// Serializes a [`Header`] into raw binary DTA bytes (formats 104–116).
-    fn serialize_binary(header: &Header) -> Vec<u8> {
-        let release = header.release();
-        let byte_order = header.byte_order();
+    /// Writes `header` through the full writer pipeline with a
+    /// matching schema of `k` Byte variables and `n` rows of
+    /// default-valued Bytes, producing a complete DTA file. Tests
+    /// that assert `header.variable_count() == k` / `observation_count() == n`
+    /// rely on the writer patching those fields from the schema and
+    /// record stream.
+    fn serialize_through_writer(header: &Header, k: u32, n: u64) -> Vec<u8> {
+        use crate::stata::dta::schema::Schema;
+        use crate::stata::dta::value::Value;
+        use crate::stata::dta::variable::Variable;
+        use crate::stata::dta::variable_type::VariableType;
+        use crate::stata::stata_byte::StataByte;
 
-        let mut buffer = vec![
-            release.to_byte(),
-            byte_order.to_byte(),
-            0x01, // filetype
-            0x00, // unused
-        ];
+        let k_usize = usize::try_from(k).unwrap();
+        let variables: Vec<_> = (0..k_usize)
+            .map(|i| Variable::builder(VariableType::Byte, format!("v{i}")).format("%8.0g"))
+            .collect();
+        let schema = Schema::builder().variables(variables).build().unwrap();
 
-        let variable_count = u16::try_from(header.variable_count()).unwrap();
-        let observation_count = u32::try_from(header.observation_count()).unwrap();
-        buffer.extend_from_slice(&byte_order.write_u16(variable_count));
-        buffer.extend_from_slice(&byte_order.write_u32(observation_count));
-
-        // Fixed-length label field, null-padded
-        let label_bytes = header.dataset_label().as_bytes();
-        let mut label_buf = vec![0u8; release.dataset_label_len()];
-        label_buf[..label_bytes.len()].copy_from_slice(label_bytes);
-        buffer.extend_from_slice(&label_buf);
-
-        // Fixed-length timestamp field, null-padded
-        let timestamp_length = release.timestamp_len();
-        if timestamp_length > 0 {
-            let mut timestamp_buffer = vec![0u8; timestamp_length];
-            if let Some(ts) = header.timestamp() {
-                let ts_str = ts.to_string();
-                timestamp_buffer[..ts_str.len()].copy_from_slice(ts_str.as_bytes());
-            }
-            buffer.extend_from_slice(&timestamp_buffer);
+        let characteristic_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header.clone())
+            .unwrap()
+            .write_schema(schema)
+            .unwrap();
+        let mut record_writer = characteristic_writer.into_record_writer().unwrap();
+        let row: Vec<Value<'_>> = (0..k_usize)
+            .map(|_| Value::Byte(StataByte::Present(0)))
+            .collect();
+        for _ in 0..n {
+            record_writer.write_record(&row).unwrap();
         }
-
-        buffer
+        record_writer
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner()
     }
 
     /// Serializes a [`Header`] into raw XML DTA bytes (formats 117–119).
@@ -501,12 +507,10 @@ mod tests {
     fn binary_v114_little_endian() {
         let timestamp = StataTimestamp::parse("01 Jan 2024 13:45").unwrap();
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(5)
-            .observation_count(100)
             .dataset_label("My Dataset")
             .timestamp(Some(timestamp))
             .build();
-        let header = read_back(serialize_binary(&expected));
+        let header = read_back(serialize_through_writer(&expected, 5, 100));
         assert_eq!(header.release(), Release::V114);
         assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
         assert_eq!(header.variable_count(), 5);
@@ -523,12 +527,10 @@ mod tests {
     #[test]
     fn binary_v114_big_endian() {
         let expected = Header::builder(Release::V114, ByteOrder::BigEndian)
-            .variable_count(3)
-            .observation_count(50)
             .dataset_label("BE test")
             .timestamp(Some(StataTimestamp::parse("15 Mar 2020 09:30").unwrap()))
             .build();
-        let header = read_back(serialize_binary(&expected));
+        let header = read_back(serialize_through_writer(&expected, 3, 50));
         assert_eq!(header.release(), Release::V114);
         assert_eq!(header.byte_order(), ByteOrder::BigEndian);
         assert_eq!(header.variable_count(), 3);
@@ -539,11 +541,9 @@ mod tests {
     #[test]
     fn binary_v104_no_timestamp() {
         let expected = Header::builder(Release::V104, ByteOrder::LittleEndian)
-            .variable_count(2)
-            .observation_count(10)
             .dataset_label("Old format")
             .build();
-        let header = read_back(serialize_binary(&expected));
+        let header = read_back(serialize_through_writer(&expected, 2, 10));
         assert_eq!(header.release(), Release::V104);
         assert_eq!(header.variable_count(), 2);
         assert_eq!(header.observation_count(), 10);
@@ -554,22 +554,18 @@ mod tests {
     #[test]
     fn binary_v107_short_label() {
         let expected = Header::builder(Release::V107, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .observation_count(1)
             .dataset_label("short")
             .timestamp(Some(StataTimestamp::parse("12 Feb 2019 00:00").unwrap()))
             .build();
-        let header = read_back(serialize_binary(&expected));
+        let header = read_back(serialize_through_writer(&expected, 1, 1));
         assert_eq!(header.release(), Release::V107);
         assert_eq!(header.dataset_label(), "short");
     }
 
     #[test]
     fn binary_empty_label_and_timestamp() {
-        let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .build();
-        let header = read_back(serialize_binary(&expected));
+        let expected = Header::builder(Release::V114, ByteOrder::LittleEndian).build();
+        let header = read_back(serialize_through_writer(&expected, 1, 0));
         assert_eq!(header.dataset_label(), "");
         assert!(header.timestamp().is_none());
     }
@@ -605,12 +601,11 @@ mod tests {
     #[test]
     fn binary_encoding_override() {
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
-            .variable_count(1)
             .dataset_label("test")
             .build();
         let schema = DtaReader::new()
             .encoding(encoding_rs::UTF_8)
-            .from_reader(Cursor::new(serialize_binary(&expected)))
+            .from_reader(Cursor::new(serialize_through_writer(&expected, 1, 0)))
             .read_header()
             .unwrap();
         assert_eq!(schema.header().dataset_label(), "test");
@@ -621,12 +616,10 @@ mod tests {
     #[test]
     fn xml_v117_little_endian() {
         let expected = Header::builder(Release::V117, ByteOrder::LittleEndian)
-            .variable_count(5)
-            .observation_count(100)
             .dataset_label("XML test")
             .timestamp(Some(StataTimestamp::parse("01 Jan 2024 13:45").unwrap()))
             .build();
-        let header = read_back(serialize_xml(&expected));
+        let header = read_back(serialize_through_writer(&expected, 5, 100));
         assert_eq!(header.release(), Release::V117);
         assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
         assert_eq!(header.variable_count(), 5);
@@ -640,12 +633,10 @@ mod tests {
     #[test]
     fn xml_v117_big_endian() {
         let expected = Header::builder(Release::V117, ByteOrder::BigEndian)
-            .variable_count(3)
-            .observation_count(50)
             .dataset_label("BE XML")
             .timestamp(Some(StataTimestamp::parse("15 Mar 2020 09:30").unwrap()))
             .build();
-        let header = read_back(serialize_xml(&expected));
+        let header = read_back(serialize_through_writer(&expected, 3, 50));
         assert_eq!(header.release(), Release::V117);
         assert_eq!(header.byte_order(), ByteOrder::BigEndian);
         assert_eq!(header.variable_count(), 3);
@@ -685,10 +676,8 @@ mod tests {
 
     #[test]
     fn xml_empty_label_and_timestamp() {
-        let expected = Header::builder(Release::V117, ByteOrder::LittleEndian)
-            .variable_count(1)
-            .build();
-        let header = read_back(serialize_xml(&expected));
+        let expected = Header::builder(Release::V117, ByteOrder::LittleEndian).build();
+        let header = read_back(serialize_through_writer(&expected, 1, 0));
         assert_eq!(header.dataset_label(), "");
         assert!(header.timestamp().is_none());
     }
