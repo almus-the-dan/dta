@@ -30,6 +30,12 @@ pub mod async_schema_reader;
 /// Async writer for variable definitions (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_schema_writer;
+/// Async reader for value-label tables (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_value_label_reader;
+/// Async writer for value-label tables (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_value_label_writer;
 #[cfg(feature = "tokio")]
 mod async_writer_state;
 /// Byte order (endianness) representation.
@@ -97,6 +103,8 @@ mod string_encoding;
 pub mod value;
 /// Named table mapping integer values to string labels.
 pub mod value_label;
+mod value_label_format;
+mod value_label_parse;
 /// Reads value-label tables from a DTA file.
 pub mod value_label_reader;
 /// Writes value-label tables to a DTA file.

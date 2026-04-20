@@ -1,6 +1,5 @@
 use std::io::{BufRead, Seek};
 
-use super::byte_order::ByteOrder;
 use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -9,6 +8,10 @@ use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
 use super::schema::Schema;
 use super::value_label::{ValueLabelEntry, ValueLabelTable};
+use super::value_label_parse::{
+    VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, overflow_error,
+    parse_modern_payload,
+};
 
 /// Reads value-label tables from a DTA file.
 ///
@@ -127,36 +130,6 @@ impl<R: BufRead> ValueLabelReader<R> {
         let skip_len = release.value_label_name_len() + release.value_label_table_padding_len();
         self.state.skip(skip_len, Section::ValueLabels)
     }
-}
-
-/// Decodes a null-terminated label from raw bytes using the given
-/// encoding. `max_len` caps the search for the null terminator.
-fn decode_label(
-    bytes: &[u8],
-    max_len: usize,
-    encoding: &'static encoding_rs::Encoding,
-) -> Result<String> {
-    let bounded = &bytes[..bytes.len().min(max_len)];
-    let end = bounded
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(bounded.len());
-    encoding
-        .decode_without_bom_handling_and_without_replacement(&bounded[..end])
-        .map(std::borrow::Cow::into_owned)
-        .ok_or_else(|| {
-            DtaError::io(
-                Section::ValueLabels,
-                std::io::Error::other("invalid string encoding in value label"),
-            )
-        })
-}
-
-fn overflow_error() -> DtaError {
-    DtaError::io(
-        Section::ValueLabels,
-        std::io::Error::other("value label table size overflow"),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -296,120 +269,23 @@ impl<R: BufRead> ValueLabelReader<R> {
     /// distinguishing `<lbl>` from `</value_labels>`.
     fn read_xml_label_or_close(&mut self) -> Result<XmlLabelTag> {
         let position = self.state.position();
-        let tag_bytes = self.state.read_exact(5, Section::ValueLabels)?;
-
-        match tag_bytes {
-            b"<lbl>" => Ok(XmlLabelTag::EntryOpen),
-            b"</val" => {
-                self.state.expect_bytes(
-                    b"ue_labels>",
-                    Section::ValueLabels,
-                    FormatErrorKind::InvalidMagic,
-                )?;
-                Ok(XmlLabelTag::SectionClose)
-            }
-            _ => Err(DtaError::format(
+        let head = self.state.read_exact(5, Section::ValueLabels)?;
+        let tag = classify_xml_label_tag(head).ok_or_else(|| {
+            DtaError::format(
                 Section::ValueLabels,
                 position,
                 FormatErrorKind::InvalidMagic,
-            )),
-        }
-    }
-}
-
-enum XmlLabelTag {
-    EntryOpen,
-    SectionClose,
-}
-
-/// Parses the modern value-label payload:
-/// `n` (u32), `txtlen` (u32), `off[n]` (u32 each), `val[n]` (i32 each),
-/// `txt[txtlen]`.
-fn parse_modern_payload(
-    payload: &[u8],
-    byte_order: ByteOrder,
-    encoding: &'static encoding_rs::Encoding,
-    table_name: &str,
-) -> Result<ValueLabelTable> {
-    if payload.len() < 8 {
-        return Err(DtaError::format(
-            Section::ValueLabels,
-            0,
-            FormatErrorKind::Truncated {
-                expected: 8,
-                actual: u64::try_from(payload.len()).unwrap_or(u64::MAX),
-            },
-        ));
-    }
-
-    let entry_count = byte_order.read_u32([payload[0], payload[1], payload[2], payload[3]]);
-    let text_len = byte_order.read_u32([payload[4], payload[5], payload[6], payload[7]]);
-
-    let entry_count_usize = usize::try_from(entry_count).map_err(|_| overflow_error())?;
-    let text_len_usize = usize::try_from(text_len).map_err(|_| overflow_error())?;
-
-    // Validate payload length: 8 (header) + 4*n (offsets) + 4*n (values) + txt length
-    let expected_len = 8usize
-        .checked_add(
-            entry_count_usize
-                .checked_mul(8)
-                .ok_or_else(overflow_error)?,
-        )
-        .and_then(|v| v.checked_add(text_len_usize))
-        .ok_or_else(overflow_error)?;
-
-    if payload.len() < expected_len {
-        return Err(DtaError::format(
-            Section::ValueLabels,
-            0,
-            FormatErrorKind::Truncated {
-                expected: u64::try_from(expected_len).unwrap_or(u64::MAX),
-                actual: u64::try_from(payload.len()).unwrap_or(u64::MAX),
-            },
-        ));
-    }
-
-    let offsets_start = 8;
-    let values_start = offsets_start + 4 * entry_count_usize;
-    let text_start = values_start + 4 * entry_count_usize;
-
-    let mut entries = Vec::with_capacity(entry_count_usize);
-    for entry_index in 0..entry_count_usize {
-        let offset_position = offsets_start + 4 * entry_index;
-        let text_offset = byte_order.read_u32([
-            payload[offset_position],
-            payload[offset_position + 1],
-            payload[offset_position + 2],
-            payload[offset_position + 3],
-        ]);
-        let text_offset_usize = usize::try_from(text_offset).map_err(|_| overflow_error())?;
-
-        if text_offset_usize >= text_len_usize {
-            return Err(DtaError::format(
+            )
+        })?;
+        if let XmlLabelTag::SectionClose = tag {
+            self.state.expect_bytes(
+                VALUE_LABELS_CLOSE_REST,
                 Section::ValueLabels,
-                0,
-                FormatErrorKind::Truncated {
-                    expected: u64::from(text_offset) + 1,
-                    actual: u64::from(text_len),
-                },
-            ));
+                FormatErrorKind::InvalidMagic,
+            )?;
         }
-
-        let value_position = values_start + 4 * entry_index;
-        let value = byte_order.read_i32([
-            payload[value_position],
-            payload[value_position + 1],
-            payload[value_position + 2],
-            payload[value_position + 3],
-        ]);
-
-        let label_bytes = &payload[text_start + text_offset_usize..];
-        let label = decode_label(label_bytes, text_len_usize - text_offset_usize, encoding)?;
-
-        entries.push(ValueLabelEntry::new(value, label));
+        Ok(tag)
     }
-
-    Ok(ValueLabelTable::new(table_name.to_owned(), entries))
 }
 
 // ---------------------------------------------------------------------------

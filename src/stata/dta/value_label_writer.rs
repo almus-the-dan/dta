@@ -1,10 +1,10 @@
-use std::borrow::Cow;
 use std::io::{Seek, Write};
 
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::schema::Schema;
-use super::value_label::{ValueLabelEntry, ValueLabelTable};
+use super::value_label::ValueLabelTable;
+use super::value_label_format::{build_modern_text_payload, build_old_slot_table};
 use super::writer_state::WriterState;
 
 /// Writes value-label tables — the last section of a DTA file.
@@ -49,18 +49,6 @@ impl<W> ValueLabelWriter<W> {
         &self.schema
     }
 }
-
-/// Maximum value that fits in the V104 legacy layout. Each slot is
-/// 8 bytes and `table_len` is a `u16`, so `slot_count * 8 ≤ u16::MAX`
-/// gives `slot_count ≤ 8191`. Values are 0-indexed, so the largest
-/// representable value is `8191 - 1 = 8190`.
-const OLD_VALUE_LABEL_MAX_VALUE: i32 = 8190;
-
-/// Output shape of
-/// [`ValueLabelWriter::build_modern_text_payload`] — encoded labels
-/// (borrowed when possible), per-entry byte offsets into the logical
-/// text area, and the total text length.
-type ModernTextPayload<'a> = (Vec<Cow<'a, [u8]>>, Vec<u32>, u32);
 
 impl<W: Write + Seek> ValueLabelWriter<W> {
     /// Writes a single value-label table.
@@ -157,7 +145,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
 
-        let slots = self.build_old_slot_table(table)?;
+        let slots = build_old_slot_table(table, self.state.encoding(), position_before)?;
         let slot_count = slots.len();
         let table_len_u16 = u16::try_from(slot_count.saturating_mul(8)).map_err(|_| {
             DtaError::format(
@@ -194,77 +182,6 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
         Ok(())
     }
 
-    /// Validates every entry in `table` and packs encoded labels into
-    /// a slot-indexed vector for the V104 legacy layout. The returned
-    /// `Vec`'s length is the slot count (= max value + 1, or 0 when
-    /// empty); empty slots are `None` and represent "no entry for
-    /// this value".
-    ///
-    /// Each slot holds a `Cow<[u8]>` — borrowed directly from the
-    /// caller's `ValueLabelTable` on the UTF-8 → UTF-8 pass-through
-    /// path, owned only when the active encoding applied.
-    ///
-    /// Errors upfront — before any bytes are written — on negative or
-    /// out-of-range values (`OldValueLabelValueOutOfRange`), duplicate
-    /// values (same variant), labels that exceed the 8-byte slot
-    /// (`FieldTooLarge`), and labels the active encoding can't
-    /// represent (`InvalidEncoding`).
-    fn build_old_slot_table<'a>(
-        &self,
-        table: &'a ValueLabelTable,
-    ) -> Result<Vec<Option<Cow<'a, [u8]>>>> {
-        let encoding = self.state.encoding();
-        let position_before = self.state.position();
-
-        let mut slots: Vec<Option<Cow<'a, [u8]>>> = Vec::new();
-        for entry in table.entries() {
-            let value = entry.value();
-            if !(0..=OLD_VALUE_LABEL_MAX_VALUE).contains(&value) {
-                return Err(DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::OldValueLabelValueOutOfRange { value },
-                ));
-            }
-            let slot = usize::try_from(value).expect("0..=OLD_VALUE_LABEL_MAX_VALUE fits usize");
-
-            if slot >= slots.len() {
-                slots.resize(slot + 1, None);
-            }
-            if slots[slot].is_some() {
-                return Err(DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::OldValueLabelValueOutOfRange { value },
-                ));
-            }
-
-            let (encoded, _, had_unmappable) = encoding.encode(entry.label());
-            if had_unmappable {
-                return Err(DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::InvalidEncoding {
-                        field: Field::ValueLabelEntry,
-                    },
-                ));
-            }
-            if encoded.len() > 8 {
-                return Err(DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::ValueLabelEntry,
-                        max: 8,
-                        actual: u64::try_from(encoded.len()).unwrap_or(u64::MAX),
-                    },
-                ));
-            }
-            slots[slot] = Some(encoded);
-        }
-        Ok(slots)
-    }
-
     /// Writes one table in the modern (V105+) layout:
     ///
     /// - (XML only) `<lbl>`
@@ -288,7 +205,8 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
         // offsets without emitting any bytes yet. `encoded_labels`
         // keeps each label as a `Cow` — borrowed directly from the
         // caller's table on the pass-through encoding path.
-        let (encoded_labels, offsets, text_len) = self.build_modern_text_payload(entries)?;
+        let (encoded_labels, offsets, text_len) =
+            build_modern_text_payload(entries, self.state.encoding(), position_before)?;
         let entry_count = u32::try_from(entries.len()).map_err(|_| {
             DtaError::format(
                 Section::ValueLabels,
@@ -368,65 +286,6 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
 
         Ok(())
     }
-
-    /// Encodes every label into an owned or borrowed `Cow` (no
-    /// concatenation) and records each label's byte offset into the
-    /// logical null-terminated text area the DTA layout expects.
-    /// Returns `(encoded_labels, offsets, text_len)` where
-    /// `offsets[i]` is the byte position of the `i`-th label in the
-    /// text area and `text_len` is the total text-area byte count
-    /// (including the per-label null terminators).
-    ///
-    /// Errors upfront — before any bytes are written — on labels the
-    /// active encoding can't represent (`InvalidEncoding`) and on
-    /// cumulative text length exceeding `u32::MAX`.
-    fn build_modern_text_payload<'a>(
-        &self,
-        entries: &'a [ValueLabelEntry],
-    ) -> Result<ModernTextPayload<'a>> {
-        let encoding = self.state.encoding();
-        let position_before = self.state.position();
-        let mut encoded_labels: Vec<Cow<'a, [u8]>> = Vec::with_capacity(entries.len());
-        let mut offsets: Vec<u32> = Vec::with_capacity(entries.len());
-        let mut running_len: usize = 0;
-        for entry in entries {
-            let (encoded, _, had_unmappable) = encoding.encode(entry.label());
-            if had_unmappable {
-                return Err(DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::InvalidEncoding {
-                        field: Field::ValueLabelEntry,
-                    },
-                ));
-            }
-            let offset = u32::try_from(running_len)
-                .map_err(|_| text_overflow(position_before, running_len))?;
-            offsets.push(offset);
-            // Each label contributes its own bytes plus one
-            // null-terminator byte to the logical text area.
-            running_len = running_len
-                .checked_add(encoded.len())
-                .and_then(|n| n.checked_add(1))
-                .ok_or_else(|| text_overflow(position_before, usize::MAX))?;
-            encoded_labels.push(encoded);
-        }
-        let text_len =
-            u32::try_from(running_len).map_err(|_| text_overflow(position_before, running_len))?;
-        Ok((encoded_labels, offsets, text_len))
-    }
-}
-
-fn text_overflow(position: u64, actual: usize) -> DtaError {
-    DtaError::format(
-        Section::ValueLabels,
-        position,
-        FormatErrorKind::FieldTooLarge {
-            field: Field::ValueLabelEntry,
-            max: u64::from(u32::MAX),
-            actual: u64::try_from(actual).unwrap_or(u64::MAX),
-        },
-    )
 }
 
 // ===========================================================================

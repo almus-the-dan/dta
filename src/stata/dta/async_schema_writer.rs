@@ -326,6 +326,9 @@ mod tests {
             .into_long_string_writer()
             .await
             .unwrap()
+            .into_value_label_writer()
+            .await
+            .unwrap()
             .finish()
             .await
             .unwrap();

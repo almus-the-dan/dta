@@ -1,5 +1,6 @@
 use tokio::io::{AsyncSeek, AsyncWrite};
 
+use super::async_value_label_writer::AsyncValueLabelWriter;
 use super::async_writer_state::AsyncWriterState;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -118,22 +119,18 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
     }
 
     /// Closes the long-strings section, patches map slot 11
-    /// (value-labels offset) for XML releases, and returns the
-    /// underlying writer.
+    /// (value-labels offset) for XML releases, and transitions to
+    /// value-label writing.
     ///
     /// For XML (V117+) the closing `</strls>` tag is emitted even
     /// when no entries were written (the opening tag is lazy-emitted
     /// here in that case). For pre-V117 no section exists at all —
     /// nothing is written.
     ///
-    /// POC-shaped terminal: once the async value-label writer exists
-    /// this will return `AsyncValueLabelWriter<W>` and advance the
-    /// typestate chain.
-    ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
-    pub async fn finish(mut self) -> Result<W> {
+    pub async fn into_value_label_writer(mut self) -> Result<AsyncValueLabelWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
 
@@ -150,7 +147,11 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
                 .await?;
         }
 
-        Ok(self.state.into_inner())
+        Ok(AsyncValueLabelWriter::new(
+            self.state,
+            self.header,
+            self.schema,
+        ))
     }
 
     /// Emits the XML `<strls>` tag on first use. Only called on
@@ -294,7 +295,13 @@ mod tests {
             .await
             .unwrap();
         let long_string_writer = write_fn(long_string_writer).await;
-        let cursor: Cursor<Vec<u8>> = long_string_writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = long_string_writer
+            .into_value_label_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
 
         let mut long_string_reader = DtaReader::new()
@@ -486,7 +493,13 @@ mod tests {
         writer.write_long_string_table(&empty).await.unwrap();
         // Transition should still succeed without emitting any
         // `<strls>` bytes.
-        let _: Cursor<Vec<u8>> = writer.finish().await.unwrap();
+        let _: Cursor<Vec<u8>> = writer
+            .into_value_label_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

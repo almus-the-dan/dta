@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use tokio::io::AsyncRead;
 
 use super::async_reader_state::AsyncReaderState;
+use super::async_value_label_reader::AsyncValueLabelReader;
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -108,18 +109,19 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
         }
     }
 
-    /// Consumes any remaining entries and closes out this phase.
-    ///
-    /// POC-shaped terminal: once the async value-label reader exists
-    /// this will return `AsyncValueLabelReader<R>` and advance the
-    /// typestate chain.
+    /// Consumes any remaining entries and transitions to value-label
+    /// reading.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures.
-    pub async fn finish(mut self) -> Result<()> {
+    pub async fn into_value_label_reader(mut self) -> Result<AsyncValueLabelReader<R>> {
         self.skip_to_end().await?;
-        Ok(())
+        Ok(AsyncValueLabelReader::new(
+            self.state,
+            self.header,
+            self.schema,
+        ))
     }
 }
 
@@ -263,7 +265,13 @@ mod tests {
             .await
             .unwrap();
         long_string_writer.write_long_string(&entry).await.unwrap();
-        let cursor: Cursor<Vec<u8>> = long_string_writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = long_string_writer
+            .into_value_label_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
 
         let mut reader = DtaReader::new()
@@ -335,6 +343,9 @@ mod tests {
             .await
             .unwrap()
             .into_long_string_writer()
+            .await
+            .unwrap()
+            .into_value_label_writer()
             .await
             .unwrap()
             .finish()

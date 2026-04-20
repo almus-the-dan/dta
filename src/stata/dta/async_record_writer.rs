@@ -368,6 +368,9 @@ mod tests {
             .into_long_string_writer()
             .await
             .unwrap()
+            .into_value_label_writer()
+            .await
+            .unwrap()
             .finish()
             .await
             .unwrap();
@@ -625,6 +628,9 @@ mod tests {
         }
         let cursor: Cursor<Vec<u8>> = writer
             .into_long_string_writer()
+            .await
+            .unwrap()
+            .into_value_label_writer()
             .await
             .unwrap()
             .finish()

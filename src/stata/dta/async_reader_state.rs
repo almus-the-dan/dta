@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+
 use encoding_rs::Encoding;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -126,6 +128,45 @@ impl<R: AsyncRead + Unpin> AsyncReaderState<R> {
         Ok(byte_order.read_u64([
             buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
         ]))
+    }
+
+    /// Like [`read_exact`](Self::read_exact), but returns `None` on
+    /// clean EOF (zero bytes read) instead of an error. A partial
+    /// read still returns an error.
+    pub async fn try_read_exact(&mut self, len: usize, section: Section) -> Result<Option<&[u8]>> {
+        self.buffer.resize(len, 0);
+        match self.reader.read_exact(&mut self.buffer).await {
+            Ok(_) => {
+                self.position += u64::try_from(len).expect("buffer length exceeds u64");
+                Ok(Some(&self.buffer))
+            }
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(None),
+            Err(e) => Err(DtaError::io(section, e)),
+        }
+    }
+
+    /// Reads a `u16`, returning `None` on clean EOF.
+    pub async fn try_read_u16(
+        &mut self,
+        byte_order: ByteOrder,
+        section: Section,
+    ) -> Result<Option<u16>> {
+        Ok(self
+            .try_read_exact(2, section)
+            .await?
+            .map(|b| byte_order.read_u16([b[0], b[1]])))
+    }
+
+    /// Reads a `u32`, returning `None` on clean EOF.
+    pub async fn try_read_u32(
+        &mut self,
+        byte_order: ByteOrder,
+        section: Section,
+    ) -> Result<Option<u32>> {
+        Ok(self
+            .try_read_exact(4, section)
+            .await?
+            .map(|b| byte_order.read_u32([b[0], b[1], b[2], b[3]])))
     }
 
     /// Reads and validates an exact byte sequence. Returns the given
