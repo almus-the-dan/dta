@@ -4,6 +4,7 @@ use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::string_encoding::encode_value;
 
 /// Shared state carried across the writer typestate chain.
 ///
@@ -322,14 +323,7 @@ impl<W: Write> WriterState<W> {
             return Ok(());
         }
         let position = self.position;
-        let (encoded, _, had_unmappable) = self.encoding.encode(value);
-        if had_unmappable {
-            return Err(DtaError::format(
-                section,
-                position,
-                FormatErrorKind::InvalidEncoding { field },
-            ));
-        }
+        let encoded = encode_value(value, self.encoding, section, field, position)?;
         if encoded.len() > len {
             return Err(DtaError::format(
                 section,

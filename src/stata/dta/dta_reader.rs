@@ -7,6 +7,11 @@ use encoding_rs::Encoding;
 use crate::stata::dta::dta_error::{DtaError, Result, Section};
 use crate::stata::dta::header_reader::HeaderReader;
 
+#[cfg(feature = "tokio")]
+use crate::stata::dta::async_header_reader::AsyncHeaderReader;
+#[cfg(feature = "tokio")]
+use tokio::io::{AsyncRead, BufReader as TokioBufReader};
+
 /// Builder for configuring and opening a DTA file reader.
 ///
 /// Set options with chained methods, then call a terminal method
@@ -80,5 +85,48 @@ impl Default for DtaReader {
     #[inline]
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl DtaReader {
+    /// Opens the file at `path` asynchronously and begins reading it
+    /// as a DTA file, wrapping it in a [`tokio::io::BufReader`]
+    /// automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] if the file cannot be opened.
+    //noinspection RsSelfConvention
+    #[inline]
+    pub async fn from_tokio_path(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<AsyncHeaderReader<TokioBufReader<tokio::fs::File>>> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| DtaError::io(Section::Header, e))?;
+        Ok(self.from_tokio_file(file))
+    }
+
+    /// Begins reading a DTA file from a [`tokio::fs::File`], wrapping
+    /// it in a [`tokio::io::BufReader`] automatically.
+    //noinspection RsSelfConvention
+    #[must_use]
+    #[inline]
+    pub fn from_tokio_file(
+        self,
+        file: tokio::fs::File,
+    ) -> AsyncHeaderReader<TokioBufReader<tokio::fs::File>> {
+        self.from_tokio_reader(TokioBufReader::new(file))
+    }
+
+    /// Begins reading a DTA file from any async reader, returning an
+    /// [`AsyncHeaderReader`] for the first phase of parsing.
+    //noinspection RsSelfConvention
+    #[must_use]
+    #[inline]
+    pub fn from_tokio_reader<R: AsyncRead + Unpin>(self, reader: R) -> AsyncHeaderReader<R> {
+        AsyncHeaderReader::new(reader, self.encoding)
     }
 }

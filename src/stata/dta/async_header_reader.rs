@@ -1,7 +1,7 @@
-use std::io::{BufRead, Read, Seek};
-
 use encoding_rs::Encoding;
+use tokio::io::AsyncRead;
 
+use super::async_reader_state::AsyncReaderState;
 use super::byte_order::ByteOrder;
 use super::dta_error::{Field, FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -9,60 +9,66 @@ use super::header_parse::{
     parse_binary_byte_order, parse_binary_release, parse_fixed_timestamp, parse_xml_byte_order,
     parse_xml_release,
 };
-use super::reader_state::ReaderState;
 use super::release::Release;
-use super::schema_reader::SchemaReader;
 use crate::stata::stata_timestamp::StataTimestamp;
 
-/// Entry point for reading a DTA file.
+/// Entry point for reading a DTA file asynchronously.
 ///
-/// Created via [`DtaReader::from_reader`](super::dta_reader::DtaReader::from_reader)
-/// or [`DtaReader::from_file`](super::dta_reader::DtaReader::from_file),
-/// then call [`read_header`](Self::read_header) to parse the file header
-/// and advance to schema reading.
+/// Created via [`DtaReader::from_tokio_reader`](super::dta_reader::DtaReader::from_tokio_reader),
+/// [`from_tokio_file`](super::dta_reader::DtaReader::from_tokio_file),
+/// or [`from_tokio_path`](super::dta_reader::DtaReader::from_tokio_path),
+/// then call [`read_header`](Self::read_header) to parse the file
+/// header.
 #[derive(Debug)]
-pub struct HeaderReader<R> {
-    state: ReaderState<R>,
+pub struct AsyncHeaderReader<R> {
+    state: AsyncReaderState<R>,
     encoding_override: Option<&'static Encoding>,
 }
 
-impl<R> HeaderReader<R> {
+impl<R> AsyncHeaderReader<R> {
     /// Creates a header reader. The encoding override, if provided,
     /// will be used regardless of format version; otherwise the
     /// encoding is determined from the release number.
     #[must_use]
     pub(crate) fn new(reader: R, encoding: Option<&'static Encoding>) -> Self {
-        // The initial encoding is a placeholder — it is replaced once
-        // the release number is known (or kept if an override was given).
         let initial_encoding = encoding.unwrap_or(encoding_rs::UTF_8);
         Self {
-            state: ReaderState::new(reader, initial_encoding),
+            state: AsyncReaderState::new(reader, initial_encoding),
             encoding_override: encoding,
         }
     }
 }
 
-impl<R: BufRead + Seek> HeaderReader<R> {
-    /// Parses the file header, determines the encoding, and
-    /// transitions to schema reading.
+impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
+    /// Parses the file header and returns the parsed [`Header`].
+    ///
+    /// Auto-detects the format by reading the first byte: `b'<'`
+    /// selects the XML header parser (formats 117+), otherwise the
+    /// binary parser (formats 104–116). Determines the character
+    /// encoding from the release number (Windows-1252 for pre-118,
+    /// UTF-8 for 118+), unless an explicit encoding override was set
+    /// on the `DtaReader` builder.
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures and
-    /// [`DtaError::Format`] when the header bytes do not match any
-    /// supported DTA format (104–119).
-    pub fn read_header(mut self) -> Result<SchemaReader<R>> {
-        let first_byte = self.state.read_u8(Section::Header)?;
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
+    /// when the header bytes do not match any supported DTA format
+    /// (104–119).
+    pub async fn read_header(mut self) -> Result<Header> {
+        let first_byte = self.state.read_u8(Section::Header).await?;
 
         let (release, byte_order, variable_count, observation_count) = if first_byte == b'<' {
-            self.state.expect_bytes(
-                b"stata_dta>",
-                Section::Header,
-                FormatErrorKind::InvalidMagic,
-            )?;
-            self.read_xml_preamble()?
+            self.state
+                .expect_bytes(
+                    b"stata_dta>",
+                    Section::Header,
+                    FormatErrorKind::InvalidMagic,
+                )
+                .await?;
+            self.read_xml_preamble().await?
         } else {
-            self.read_binary_preamble(first_byte)?
+            self.read_binary_preamble(first_byte).await?
         };
 
         let encoding = self
@@ -70,19 +76,19 @@ impl<R: BufRead + Seek> HeaderReader<R> {
             .unwrap_or_else(|| release.default_encoding());
 
         let (dataset_label, timestamp) = if release.is_xml_like() {
-            self.read_xml_label_and_timestamp(release, byte_order, encoding)?
+            self.read_xml_label_and_timestamp(release, byte_order, encoding)
+                .await?
         } else {
-            self.read_binary_label_and_timestamp(release, encoding)?
+            self.read_binary_label_and_timestamp(release, encoding)
+                .await?
         };
 
-        let header = Header::builder(release, byte_order)
+        Ok(Header::builder(release, byte_order)
             .variable_count(variable_count)
             .observation_count(observation_count)
             .dataset_label(dataset_label)
             .timestamp(timestamp)
-            .build();
-        let state = self.state.with_encoding(encoding);
-        Ok(SchemaReader::new(state, header))
+            .build())
     }
 }
 
@@ -90,47 +96,41 @@ impl<R: BufRead + Seek> HeaderReader<R> {
 // Binary format (104–116)
 // ---------------------------------------------------------------------------
 
-impl<R: Read> HeaderReader<R> {
-    /// Parses the binary header struct fields (release already consumed).
-    ///
-    /// Binary layout (10 bytes total):
-    /// ```text
-    /// [0]  ds_format    (already read by caller)
-    /// [1]  byteorder    0x01 = big-endian, 0x02 = little-endian
-    /// [2]  filetype     always 0x01
-    /// [3]  unused       padding
-    /// [4-5]  nvar       u16
-    /// [6-9]  nobs       u32
-    /// ```
-    fn read_binary_preamble(&mut self, release_byte: u8) -> Result<(Release, ByteOrder, u32, u64)> {
+impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
+    async fn read_binary_preamble(
+        &mut self,
+        release_byte: u8,
+    ) -> Result<(Release, ByteOrder, u32, u64)> {
         let release = parse_binary_release(release_byte)?;
-        let byte_order_byte = self.state.read_u8(Section::Header)?;
+        let byte_order_byte = self.state.read_u8(Section::Header).await?;
         let byte_order = parse_binary_byte_order(byte_order_byte)?;
 
         // filetype (0x01) + unused padding — skip both
-        self.state.skip(2, Section::Header)?;
+        self.state.skip(2, Section::Header).await?;
 
-        let variable_count = self.state.read_u16(byte_order, Section::Header)?;
+        let variable_count = self.state.read_u16(byte_order, Section::Header).await?;
         let variable_count = u32::from(variable_count);
-        let observation_count = self.state.read_u32(byte_order, Section::Header)?;
+        let observation_count = self.state.read_u32(byte_order, Section::Header).await?;
         let observation_count = u64::from(observation_count);
 
         Ok((release, byte_order, variable_count, observation_count))
     }
 
-    /// Reads the dataset label and timestamp from a binary-format file.
-    fn read_binary_label_and_timestamp(
+    async fn read_binary_label_and_timestamp(
         &mut self,
         release: Release,
         encoding: &'static Encoding,
     ) -> Result<(String, Option<StataTimestamp>)> {
-        let dataset_label = self.state.read_fixed_string(
-            release.dataset_label_len(),
-            encoding,
-            Section::Header,
-            Field::DatasetLabel,
-        )?;
-        let timestamp = self.read_fixed_timestamp(release.timestamp_len())?;
+        let dataset_label = self
+            .state
+            .read_fixed_string(
+                release.dataset_label_len(),
+                encoding,
+                Section::Header,
+                Field::DatasetLabel,
+            )
+            .await?;
+        let timestamp = self.read_fixed_timestamp(release.timestamp_len()).await?;
         Ok((dataset_label, timestamp))
     }
 }
@@ -139,151 +139,155 @@ impl<R: Read> HeaderReader<R> {
 // XML format (117+)
 // ---------------------------------------------------------------------------
 
-impl<R: Read> HeaderReader<R> {
-    /// Parses the XML header fields (`<stata_dta><header>` already consumed).
-    ///
-    /// Reads `<release>`, `<byteorder>`, `<K>`, and `<N>`.
-    fn read_xml_preamble(&mut self) -> Result<(Release, ByteOrder, u32, u64)> {
-        // <header>
+impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
+    async fn read_xml_preamble(&mut self) -> Result<(Release, ByteOrder, u32, u64)> {
         self.state
-            .expect_bytes(b"<header>", Section::Header, FormatErrorKind::InvalidMagic)?;
+            .expect_bytes(b"<header>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
 
-        // <release>NNN</release>
         self.state
-            .expect_bytes(b"<release>", Section::Header, FormatErrorKind::InvalidMagic)?;
-        let release = self.read_xml_release()?;
-        self.state.expect_bytes(
-            b"</release>",
-            Section::Header,
-            FormatErrorKind::InvalidMagic,
-        )?;
+            .expect_bytes(b"<release>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
+        let release = self.read_xml_release().await?;
+        self.state
+            .expect_bytes(
+                b"</release>",
+                Section::Header,
+                FormatErrorKind::InvalidMagic,
+            )
+            .await?;
 
-        // <byteorder>MSF|LSF</byteorder>
-        self.state.expect_bytes(
-            b"<byteorder>",
-            Section::Header,
-            FormatErrorKind::InvalidMagic,
-        )?;
-        let byte_order = self.read_xml_byte_order()?;
-        self.state.expect_bytes(
-            b"</byteorder>",
-            Section::Header,
-            FormatErrorKind::InvalidMagic,
-        )?;
+        self.state
+            .expect_bytes(
+                b"<byteorder>",
+                Section::Header,
+                FormatErrorKind::InvalidMagic,
+            )
+            .await?;
+        let byte_order = self.read_xml_byte_order().await?;
+        self.state
+            .expect_bytes(
+                b"</byteorder>",
+                Section::Header,
+                FormatErrorKind::InvalidMagic,
+            )
+            .await?;
 
-        // <K>nvar</K>
         self.state
-            .expect_bytes(b"<K>", Section::Header, FormatErrorKind::InvalidMagic)?;
-        let variable_count = self.read_xml_variable_count(release, byte_order)?;
+            .expect_bytes(b"<K>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
+        let variable_count = self.read_xml_variable_count(release, byte_order).await?;
         self.state
-            .expect_bytes(b"</K>", Section::Header, FormatErrorKind::InvalidMagic)?;
+            .expect_bytes(b"</K>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
 
-        // <N>nobs</N>
         self.state
-            .expect_bytes(b"<N>", Section::Header, FormatErrorKind::InvalidMagic)?;
-        let observation_count = self.read_xml_observation_count(release, byte_order)?;
+            .expect_bytes(b"<N>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
+        let observation_count = self.read_xml_observation_count(release, byte_order).await?;
         self.state
-            .expect_bytes(b"</N>", Section::Header, FormatErrorKind::InvalidMagic)?;
+            .expect_bytes(b"</N>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
 
         Ok((release, byte_order, variable_count, observation_count))
     }
 
-    /// Parses a 3-character ASCII release number (e.g. `"117"`).
-    fn read_xml_release(&mut self) -> Result<Release> {
+    async fn read_xml_release(&mut self) -> Result<Release> {
         let position = self.state.position();
-        let buffer = self.state.read_exact(3, Section::Header)?;
+        let buffer = self.state.read_exact(3, Section::Header).await?;
         parse_xml_release(buffer, position)
     }
 
-    /// Parses a 3-character byte-order tag (`"MSF"` or `"LSF"`).
-    fn read_xml_byte_order(&mut self) -> Result<ByteOrder> {
+    async fn read_xml_byte_order(&mut self) -> Result<ByteOrder> {
         let position = self.state.position();
-        let buffer = self.state.read_exact(3, Section::Header)?;
+        let buffer = self.state.read_exact(3, Section::Header).await?;
         parse_xml_byte_order(buffer, position)
     }
 
-    /// Reads the variable count: `u16` for 117–118, `u32` for 119.
-    fn read_xml_variable_count(&mut self, release: Release, byte_order: ByteOrder) -> Result<u32> {
+    async fn read_xml_variable_count(
+        &mut self,
+        release: Release,
+        byte_order: ByteOrder,
+    ) -> Result<u32> {
         if release.supports_extended_variable_count() {
-            self.state.read_u32(byte_order, Section::Header)
+            self.state.read_u32(byte_order, Section::Header).await
         } else {
             self.state
                 .read_u16(byte_order, Section::Header)
+                .await
                 .map(u32::from)
         }
     }
 
-    /// Reads the observation count: `u32` for 117, `u64` for 118+.
-    fn read_xml_observation_count(
+    async fn read_xml_observation_count(
         &mut self,
         release: Release,
         byte_order: ByteOrder,
     ) -> Result<u64> {
         if release.supports_extended_observation_count() {
-            self.state.read_u64(byte_order, Section::Header)
+            self.state.read_u64(byte_order, Section::Header).await
         } else {
             self.state
                 .read_u32(byte_order, Section::Header)
+                .await
                 .map(u64::from)
         }
     }
 
-    /// Reads the dataset label and timestamp from an XML-format file.
-    ///
-    /// Layout inside `<header>`:
-    /// ```text
-    /// <label>  [len_prefix] [label_bytes]  </label>
-    /// <timestamp>  [u8 len] [timestamp_bytes]  </timestamp>
-    /// </header>
-    /// ```
-    fn read_xml_label_and_timestamp(
+    async fn read_xml_label_and_timestamp(
         &mut self,
         release: Release,
         byte_order: ByteOrder,
         encoding: &'static Encoding,
     ) -> Result<(String, Option<StataTimestamp>)> {
-        // <label> ... </label>
         self.state
-            .expect_bytes(b"<label>", Section::Header, FormatErrorKind::InvalidMagic)?;
-        let label_len = self.read_xml_label_len(release, byte_order)?;
-        let dataset_label = self.state.read_fixed_string(
-            label_len,
-            encoding,
-            Section::Header,
-            Field::DatasetLabel,
-        )?;
+            .expect_bytes(b"<label>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
+        let label_len = self.read_xml_label_len(release, byte_order).await?;
+        let dataset_label = self
+            .state
+            .read_fixed_string(label_len, encoding, Section::Header, Field::DatasetLabel)
+            .await?;
         self.state
-            .expect_bytes(b"</label>", Section::Header, FormatErrorKind::InvalidMagic)?;
+            .expect_bytes(b"</label>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
 
-        // <timestamp> ... </timestamp>
-        self.state.expect_bytes(
-            b"<timestamp>",
-            Section::Header,
-            FormatErrorKind::InvalidMagic,
-        )?;
-        let timestamp_len = usize::from(self.state.read_u8(Section::Header)?);
-        let timestamp = self.read_fixed_timestamp(timestamp_len)?;
-        self.state.expect_bytes(
-            b"</timestamp>",
-            Section::Header,
-            FormatErrorKind::InvalidMagic,
-        )?;
-
-        // </header>
         self.state
-            .expect_bytes(b"</header>", Section::Header, FormatErrorKind::InvalidMagic)?;
+            .expect_bytes(
+                b"<timestamp>",
+                Section::Header,
+                FormatErrorKind::InvalidMagic,
+            )
+            .await?;
+        let timestamp_len = usize::from(self.state.read_u8(Section::Header).await?);
+        let timestamp = self.read_fixed_timestamp(timestamp_len).await?;
+        self.state
+            .expect_bytes(
+                b"</timestamp>",
+                Section::Header,
+                FormatErrorKind::InvalidMagic,
+            )
+            .await?;
+
+        self.state
+            .expect_bytes(b"</header>", Section::Header, FormatErrorKind::InvalidMagic)
+            .await?;
 
         Ok((dataset_label, timestamp))
     }
 
-    /// Reads the label-length prefix: `u8` for 117, `u16` for 118+.
-    fn read_xml_label_len(&mut self, release: Release, byte_order: ByteOrder) -> Result<usize> {
+    async fn read_xml_label_len(
+        &mut self,
+        release: Release,
+        byte_order: ByteOrder,
+    ) -> Result<usize> {
         if release.supports_extended_dataset_label() {
             self.state
                 .read_u16(byte_order, Section::Header)
+                .await
                 .map(usize::from)
         } else {
-            self.state.read_u8(Section::Header).map(usize::from)
+            self.state.read_u8(Section::Header).await.map(usize::from)
         }
     }
 }
@@ -292,73 +296,46 @@ impl<R: Read> HeaderReader<R> {
 // Header-specific helpers
 // ---------------------------------------------------------------------------
 
-impl<R: Read> HeaderReader<R> {
-    /// Reads a fixed-length timestamp field and parses it. Returns
-    /// `None` when the field is absent (`len == 0`) or empty.
-    fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
+impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
+    async fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
         if len == 0 {
             return Ok(None);
         }
-        let buffer = self.state.read_exact(len, Section::Header)?;
+        let buffer = self.state.read_exact(len, Section::Header).await?;
         Ok(parse_fixed_timestamp(buffer))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
     use super::*;
     use crate::stata::dta::dta_error::DtaError;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
-    use crate::stata::dta::release::Release;
 
-    // -- Test serialization helpers ------------------------------------------
-
-    /// Writes `header` through the full writer pipeline with a
-    /// matching schema of `k` Byte variables and `n` rows of
-    /// default-valued Bytes, producing a complete DTA file. Tests
-    /// that assert `header.variable_count() == k` / `observation_count() == n`
-    /// rely on the writer patching those fields from the schema and
-    /// record stream.
-    fn serialize_through_writer(header: &Header, k: u32, n: u64) -> Vec<u8> {
-        use crate::stata::dta::schema::Schema;
-        use crate::stata::dta::value::Value;
-        use crate::stata::dta::variable::Variable;
-        use crate::stata::dta::variable_type::VariableType;
-        use crate::stata::stata_byte::StataByte;
-
-        let k_usize = usize::try_from(k).unwrap();
-        let variables: Vec<_> = (0..k_usize)
-            .map(|i| Variable::builder(VariableType::Byte, format!("v{i}")).format("%8.0g"))
-            .collect();
-        let schema = Schema::builder().variables(variables).build().unwrap();
-
-        let characteristic_writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+    /// Writes `header` through the async header writer, reads it
+    /// back through the async header reader, and returns the
+    /// round-tripped header. Because `AsyncHeaderWriter` is terminal
+    /// for the POC the written header carries zero K/N placeholders,
+    /// so tests that need to assert non-zero K/N use `serialize_xml`
+    /// below instead.
+    async fn round_trip(header: &Header) -> Header {
+        let bytes: Vec<u8> = DtaWriter::new()
+            .from_tokio_writer(Vec::<u8>::new())
             .write_header(header.clone())
-            .unwrap()
-            .write_schema(schema)
+            .await
             .unwrap();
-        let mut record_writer = characteristic_writer.into_record_writer().unwrap();
-        let row: Vec<Value<'_>> = (0..k_usize)
-            .map(|_| Value::Byte(StataByte::Present(0)))
-            .collect();
-        for _ in 0..n {
-            record_writer.write_record(&row).unwrap();
-        }
-        record_writer
-            .into_long_string_writer()
+        DtaReader::default()
+            .from_tokio_reader(bytes.as_slice())
+            .read_header()
+            .await
             .unwrap()
-            .into_value_label_writer()
-            .unwrap()
-            .finish()
-            .unwrap()
-            .into_inner()
     }
 
-    /// Serializes a [`Header`] into raw XML DTA bytes (formats 117–119).
+    /// Serializes a [`Header`] into raw XML DTA bytes (formats
+    /// 117–119). Hand-crafted so tests can pin specific K/N values in
+    /// the `<K>` / `<N>` slots — the async writer cannot emit
+    /// non-zero K/N until the async schema and record writers land.
     fn serialize_xml(header: &Header) -> Vec<u8> {
         let release = header.release();
         let byte_order = header.byte_order();
@@ -366,17 +343,14 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(b"<stata_dta><header>");
 
-        // <release>
         buffer.extend_from_slice(b"<release>");
         buffer.extend_from_slice(format!("{:03}", release.to_byte()).as_bytes());
         buffer.extend_from_slice(b"</release>");
 
-        // <byteorder>
         buffer.extend_from_slice(b"<byteorder>");
         buffer.extend_from_slice(byte_order.to_string().as_bytes());
         buffer.extend_from_slice(b"</byteorder>");
 
-        // <K> — variable count
         buffer.extend_from_slice(b"<K>");
         if release.supports_extended_variable_count() {
             buffer.extend_from_slice(&byte_order.write_u32(header.variable_count()));
@@ -386,7 +360,6 @@ mod tests {
         }
         buffer.extend_from_slice(b"</K>");
 
-        // <N> — observation count
         buffer.extend_from_slice(b"<N>");
         if release.supports_extended_observation_count() {
             buffer.extend_from_slice(&byte_order.write_u64(header.observation_count()));
@@ -396,7 +369,6 @@ mod tests {
         }
         buffer.extend_from_slice(b"</N>");
 
-        // <label>
         let label_bytes = header.dataset_label().as_bytes();
         buffer.extend_from_slice(b"<label>");
         if release.supports_extended_dataset_label() {
@@ -408,7 +380,6 @@ mod tests {
         buffer.extend_from_slice(label_bytes);
         buffer.extend_from_slice(b"</label>");
 
-        // <timestamp>
         let timestamp = header.timestamp().map(ToString::to_string);
         let timestamp_bytes = timestamp.as_deref().unwrap_or("").as_bytes();
         buffer.extend_from_slice(b"<timestamp>");
@@ -420,30 +391,26 @@ mod tests {
         buffer
     }
 
-    /// Parses a header from serialized bytes using default options.
-    fn read_back(data: Vec<u8>) -> Header {
+    async fn read_back(data: Vec<u8>) -> Header {
         DtaReader::default()
-            .from_reader(Cursor::new(data))
+            .from_tokio_reader(data.as_slice())
             .read_header()
+            .await
             .unwrap()
-            .header()
-            .clone()
     }
 
     // -- Binary header parsing (formats 104–116) -----------------------------
 
-    #[test]
-    fn binary_v114_little_endian() {
+    #[tokio::test]
+    async fn binary_v114_little_endian() {
         let timestamp = StataTimestamp::parse("01 Jan 2024 13:45").unwrap();
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
             .dataset_label("My Dataset")
             .timestamp(Some(timestamp))
             .build();
-        let header = read_back(serialize_through_writer(&expected, 5, 100));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V114);
         assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
-        assert_eq!(header.variable_count(), 5);
-        assert_eq!(header.observation_count(), 100);
         assert_eq!(header.dataset_label(), "My Dataset");
         let actual_timestamp = header.timestamp().unwrap();
         assert_eq!(actual_timestamp.day(), 1);
@@ -453,59 +420,55 @@ mod tests {
         assert_eq!(actual_timestamp.minute(), 45);
     }
 
-    #[test]
-    fn binary_v114_big_endian() {
+    #[tokio::test]
+    async fn binary_v114_big_endian() {
         let expected = Header::builder(Release::V114, ByteOrder::BigEndian)
             .dataset_label("BE test")
             .timestamp(Some(StataTimestamp::parse("15 Mar 2020 09:30").unwrap()))
             .build();
-        let header = read_back(serialize_through_writer(&expected, 3, 50));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V114);
         assert_eq!(header.byte_order(), ByteOrder::BigEndian);
-        assert_eq!(header.variable_count(), 3);
-        assert_eq!(header.observation_count(), 50);
         assert_eq!(header.dataset_label(), "BE test");
     }
 
-    #[test]
-    fn binary_v104_no_timestamp() {
+    #[tokio::test]
+    async fn binary_v104_no_timestamp() {
         let expected = Header::builder(Release::V104, ByteOrder::LittleEndian)
             .dataset_label("Old format")
             .build();
-        let header = read_back(serialize_through_writer(&expected, 2, 10));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V104);
-        assert_eq!(header.variable_count(), 2);
-        assert_eq!(header.observation_count(), 10);
         assert_eq!(header.dataset_label(), "Old format");
         assert!(header.timestamp().is_none());
     }
 
-    #[test]
-    fn binary_v107_short_label() {
+    #[tokio::test]
+    async fn binary_v107_short_label() {
         let expected = Header::builder(Release::V107, ByteOrder::LittleEndian)
             .dataset_label("short")
             .timestamp(Some(StataTimestamp::parse("12 Feb 2019 00:00").unwrap()))
             .build();
-        let header = read_back(serialize_through_writer(&expected, 1, 1));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V107);
         assert_eq!(header.dataset_label(), "short");
     }
 
-    #[test]
-    fn binary_empty_label_and_timestamp() {
+    #[tokio::test]
+    async fn binary_empty_label_and_timestamp() {
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian).build();
-        let header = read_back(serialize_through_writer(&expected, 1, 0));
+        let header = round_trip(&expected).await;
         assert_eq!(header.dataset_label(), "");
         assert!(header.timestamp().is_none());
     }
 
-    #[test]
-    fn binary_unsupported_release() {
-        // Hand-craft bytes with an unsupported release number
+    #[tokio::test]
+    async fn binary_unsupported_release() {
         let data = vec![103, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
         let error = DtaReader::default()
-            .from_reader(Cursor::new(data))
+            .from_tokio_reader(data.as_slice())
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(
             error,
@@ -513,13 +476,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn binary_invalid_byte_order() {
-        // Hand-craft bytes with an invalid byte-order code
+    #[tokio::test]
+    async fn binary_invalid_byte_order() {
         let data = vec![114, 0x00, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
         let error = DtaReader::default()
-            .from_reader(Cursor::new(data))
+            .from_tokio_reader(data.as_slice())
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(
             error,
@@ -527,60 +490,62 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn binary_encoding_override() {
+    #[tokio::test]
+    async fn binary_encoding_override() {
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
             .dataset_label("test")
             .build();
-        let schema = DtaReader::new()
-            .encoding(encoding_rs::UTF_8)
-            .from_reader(Cursor::new(serialize_through_writer(&expected, 1, 0)))
-            .read_header()
+        let bytes: Vec<u8> = DtaWriter::new()
+            .from_tokio_writer(Vec::<u8>::new())
+            .write_header(expected)
+            .await
             .unwrap();
-        assert_eq!(schema.header().dataset_label(), "test");
+        let parsed = DtaReader::new()
+            .encoding(encoding_rs::UTF_8)
+            .from_tokio_reader(bytes.as_slice())
+            .read_header()
+            .await
+            .unwrap();
+        assert_eq!(parsed.dataset_label(), "test");
     }
 
     // -- XML header parsing (formats 117–119) --------------------------------
 
-    #[test]
-    fn xml_v117_little_endian() {
+    #[tokio::test]
+    async fn xml_v117_little_endian() {
         let expected = Header::builder(Release::V117, ByteOrder::LittleEndian)
             .dataset_label("XML test")
             .timestamp(Some(StataTimestamp::parse("01 Jan 2024 13:45").unwrap()))
             .build();
-        let header = read_back(serialize_through_writer(&expected, 5, 100));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V117);
         assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
-        assert_eq!(header.variable_count(), 5);
-        assert_eq!(header.observation_count(), 100);
         assert_eq!(header.dataset_label(), "XML test");
         let timestamp = header.timestamp().unwrap();
         assert_eq!(timestamp.day(), 1);
         assert_eq!(timestamp.year(), 2024);
     }
 
-    #[test]
-    fn xml_v117_big_endian() {
+    #[tokio::test]
+    async fn xml_v117_big_endian() {
         let expected = Header::builder(Release::V117, ByteOrder::BigEndian)
             .dataset_label("BE XML")
             .timestamp(Some(StataTimestamp::parse("15 Mar 2020 09:30").unwrap()))
             .build();
-        let header = read_back(serialize_through_writer(&expected, 3, 50));
+        let header = round_trip(&expected).await;
         assert_eq!(header.release(), Release::V117);
         assert_eq!(header.byte_order(), ByteOrder::BigEndian);
-        assert_eq!(header.variable_count(), 3);
-        assert_eq!(header.observation_count(), 50);
         assert_eq!(header.dataset_label(), "BE XML");
     }
 
-    #[test]
-    fn xml_v118_u16_label_len_u64_nobs() {
+    #[tokio::test]
+    async fn xml_v118_u16_label_len_u64_nobs() {
         let expected = Header::builder(Release::V118, ByteOrder::LittleEndian)
             .variable_count(10)
             .observation_count(1_000_000)
             .dataset_label("v118 label")
             .build();
-        let header = read_back(serialize_xml(&expected));
+        let header = read_back(serialize_xml(&expected)).await;
         assert_eq!(header.release(), Release::V118);
         assert_eq!(header.variable_count(), 10);
         assert_eq!(header.observation_count(), 1_000_000);
@@ -588,36 +553,37 @@ mod tests {
         assert!(header.timestamp().is_none());
     }
 
-    #[test]
-    fn xml_v119_u32_variable_count() {
+    #[tokio::test]
+    async fn xml_v119_u32_variable_count() {
         let expected = Header::builder(Release::V119, ByteOrder::LittleEndian)
             .variable_count(70_000)
             .observation_count(500)
             .dataset_label("wide")
             .timestamp(Some(StataTimestamp::parse("01 Jun 2025 12:00").unwrap()))
             .build();
-        let header = read_back(serialize_xml(&expected));
+        let header = read_back(serialize_xml(&expected)).await;
         assert_eq!(header.release(), Release::V119);
         assert_eq!(header.variable_count(), 70_000);
         assert_eq!(header.observation_count(), 500);
         assert_eq!(header.dataset_label(), "wide");
     }
 
-    #[test]
-    fn xml_empty_label_and_timestamp() {
+    #[tokio::test]
+    async fn xml_empty_label_and_timestamp() {
         let expected = Header::builder(Release::V117, ByteOrder::LittleEndian).build();
-        let header = read_back(serialize_through_writer(&expected, 1, 0));
+        let header = round_trip(&expected).await;
         assert_eq!(header.dataset_label(), "");
         assert!(header.timestamp().is_none());
     }
 
     // -- Error cases ---------------------------------------------------------
 
-    #[test]
-    fn xml_invalid_magic() {
+    #[tokio::test]
+    async fn xml_invalid_magic() {
         let error = DtaReader::default()
-            .from_reader(Cursor::new(b"<not_dta>garbage".to_vec()))
+            .from_tokio_reader(&b"<not_dta>garbage"[..])
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(
             error,
@@ -625,17 +591,15 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn xml_pre_117_release_is_invalid_magic() {
-        // Pre-117 releases are binary-format only; finding one inside
-        // XML tags is malformed and must reject up front, not drift
-        // into the binary label path once `is_xml_like()` returns false.
+    #[tokio::test]
+    async fn xml_pre_117_release_is_invalid_magic() {
         let mut data = Vec::new();
         data.extend_from_slice(b"<stata_dta><header>");
         data.extend_from_slice(b"<release>114</release>");
         let error = DtaReader::default()
-            .from_reader(Cursor::new(data))
+            .from_tokio_reader(data.as_slice())
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(
             error,
@@ -643,15 +607,16 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn xml_bad_byte_order_tag() {
+    #[tokio::test]
+    async fn xml_bad_byte_order_tag() {
         let mut data = Vec::new();
         data.extend_from_slice(b"<stata_dta><header>");
         data.extend_from_slice(b"<release>117</release>");
         data.extend_from_slice(b"<byteorder>XYZ</byteorder>");
         let error = DtaReader::default()
-            .from_reader(Cursor::new(data))
+            .from_tokio_reader(data.as_slice())
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(
             error,
@@ -659,12 +624,12 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn truncated_binary_header() {
-        // Only 3 bytes — not enough for even the basic header struct
+    #[tokio::test]
+    async fn truncated_binary_header() {
         let error = DtaReader::default()
-            .from_reader(Cursor::new(vec![114, 0x02, 0x01]))
+            .from_tokio_reader(&[114u8, 0x02, 0x01][..])
             .read_header()
+            .await
             .unwrap_err();
         assert!(matches!(error, DtaError::Io { .. }));
     }

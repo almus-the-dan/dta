@@ -1,3 +1,13 @@
+/// Async entry point for reading a DTA file (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_header_reader;
+/// Async entry point for writing a DTA file (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_header_writer;
+#[cfg(feature = "tokio")]
+mod async_reader_state;
+#[cfg(feature = "tokio")]
+mod async_writer_state;
 /// Byte order (endianness) representation.
 pub mod byte_order;
 /// A single characteristic entry (key-value metadata).
@@ -14,6 +24,8 @@ pub mod dta_reader;
 pub mod dta_writer;
 /// Parsed DTA file header.
 pub mod header;
+mod header_format;
+mod header_parse;
 /// Entry point for reading a DTA file.
 pub mod header_reader;
 /// Entry point for writing a DTA file.
@@ -47,6 +59,8 @@ pub mod schema_reader;
 pub mod schema_writer;
 /// Byte offsets for post-schema sections.
 mod section_offsets;
+mod string_decoding;
+mod string_encoding;
 /// Cell value from the data section.
 pub mod value;
 /// Named table mapping integer values to string labels.

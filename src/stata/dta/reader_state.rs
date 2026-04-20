@@ -5,6 +5,7 @@ use encoding_rs::Encoding;
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::section_offsets::SectionOffsets;
+use super::string_decoding::decode_fixed_string;
 
 #[derive(Debug)]
 pub(crate) struct ReaderState<R> {
@@ -202,16 +203,6 @@ impl<R: Read> ReaderState<R> {
         }
         let position = self.position;
         let buffer = self.read_exact(len, section)?;
-        let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
-        let decoded = encoding
-            .decode_without_bom_handling_and_without_replacement(&buffer[..end])
-            .ok_or_else(|| {
-                DtaError::format(
-                    section,
-                    position,
-                    FormatErrorKind::InvalidEncoding { field },
-                )
-            })?;
-        Ok(decoded.into_owned())
+        decode_fixed_string(buffer, encoding, section, field, position)
     }
 }
