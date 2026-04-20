@@ -1,3 +1,9 @@
+/// Async reader for characteristics / expansion fields (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_characteristic_reader;
+/// Async writer for characteristics / expansion fields (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_characteristic_writer;
 /// Async entry point for reading a DTA file (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_header_reader;
@@ -18,6 +24,8 @@ mod async_writer_state;
 pub mod byte_order;
 /// A single characteristic entry (key-value metadata).
 pub mod characteristic;
+mod characteristic_format;
+mod characteristic_parse;
 /// Reads characteristics (expansion fields) from a DTA file.
 pub mod characteristic_reader;
 /// Writes characteristics (expansion fields) to a DTA file.

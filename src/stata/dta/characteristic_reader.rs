@@ -1,6 +1,10 @@
 use std::io::{BufRead, Seek};
 
 use super::characteristic::{Characteristic, CharacteristicTarget, ExpansionFieldType};
+use super::characteristic_parse::{
+    XML_SECTION_CLOSE_REST, XML_SECTION_OPEN_REST, XmlCharacteristicTag, characteristic_value_len,
+    classify_xml_tag_head, expansion_length_to_usize,
+};
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::long_string_reader::LongStringReader;
@@ -138,54 +142,36 @@ impl<R: BufRead> CharacteristicReader<R> {
 // XML internals (format 117+)
 // ---------------------------------------------------------------------------
 
-/// Disambiguated XML tag at the entry-start position within the
-/// characteristics section.
-enum XmlCharacteristicTag {
-    /// Opening `<characteristics>` section tag.
-    SectionOpen,
-    /// Closing `</characteristics>` section tag.
-    SectionClose,
-    /// Opening `<ch>` entry tag.
-    EntryOpen,
-}
-
 impl<R: BufRead> CharacteristicReader<R> {
     /// Reads the next XML-level tag in the characteristics section.
-    ///
-    /// The first four bytes distinguish all three possibilities:
-    /// - `<cha` → `<characteristics>` (a section open, consumes rest)
-    /// - `</ch` → `</characteristics>` (a section close, consumes rest)
-    /// - `<ch>` → `<ch>` (an entry open, complete in 4 bytes)
     fn read_xml_tag(&mut self) -> Result<XmlCharacteristicTag> {
         let position = self.state.position();
-        let tag_bytes = self.state.read_exact(4, Section::Characteristics)?;
-
-        match tag_bytes {
-            b"<cha" => {
-                // <characteristics> — consume remaining "racteristics>"
-                self.state.expect_bytes(
-                    b"racteristics>",
-                    Section::Characteristics,
-                    FormatErrorKind::InvalidMagic,
-                )?;
-                Ok(XmlCharacteristicTag::SectionOpen)
-            }
-            b"</ch" => {
-                // </characteristics> — consume remaining "aracteristics>"
-                self.state.expect_bytes(
-                    b"aracteristics>",
-                    Section::Characteristics,
-                    FormatErrorKind::InvalidMagic,
-                )?;
-                Ok(XmlCharacteristicTag::SectionClose)
-            }
-            b"<ch>" => Ok(XmlCharacteristicTag::EntryOpen),
-            _ => Err(DtaError::format(
+        let head = self.state.read_exact(4, Section::Characteristics)?;
+        let tag = classify_xml_tag_head(head).ok_or_else(|| {
+            DtaError::format(
                 Section::Characteristics,
                 position,
                 FormatErrorKind::InvalidMagic,
-            )),
+            )
+        })?;
+        match tag {
+            XmlCharacteristicTag::SectionOpen => {
+                self.state.expect_bytes(
+                    XML_SECTION_OPEN_REST,
+                    Section::Characteristics,
+                    FormatErrorKind::InvalidMagic,
+                )?;
+            }
+            XmlCharacteristicTag::SectionClose => {
+                self.state.expect_bytes(
+                    XML_SECTION_CLOSE_REST,
+                    Section::Characteristics,
+                    FormatErrorKind::InvalidMagic,
+                )?;
+            }
+            XmlCharacteristicTag::EntryOpen => {}
         }
+        Ok(tag)
     }
 
     /// Reads and parses one XML characteristic entry.
@@ -224,12 +210,7 @@ impl<R: BufRead> CharacteristicReader<R> {
                 }
                 XmlCharacteristicTag::EntryOpen => {
                     let length = self.state.read_u32(byte_order, Section::Characteristics)?;
-                    let length = usize::try_from(length).map_err(|_| {
-                        DtaError::io(
-                            Section::Characteristics,
-                            std::io::Error::other("characteristic length exceeds usize"),
-                        )
-                    })?;
+                    let length = expansion_length_to_usize(length)?;
                     self.state.skip(length, Section::Characteristics)?;
                     self.state.expect_bytes(
                         b"</ch>",
@@ -322,12 +303,7 @@ impl<R: BufRead> CharacteristicReader<R> {
     /// section, translating the length to `usize` with a clean I/O
     /// error on overflow.
     fn skip_expansion_payload(&mut self, length: u32) -> Result<()> {
-        let length_usize = usize::try_from(length).map_err(|_| {
-            DtaError::io(
-                Section::Characteristics,
-                std::io::Error::other("characteristic length exceeds usize"),
-            )
-        })?;
+        let length_usize = expansion_length_to_usize(length)?;
         self.state.skip(length_usize, Section::Characteristics)
     }
 
@@ -398,26 +374,7 @@ impl<R: BufRead> CharacteristicReader<R> {
             Field::CharacteristicName,
         )?;
 
-        let total_length_usize = usize::try_from(total_length).map_err(|_| {
-            DtaError::io(
-                Section::Characteristics,
-                std::io::Error::other("characteristic length exceeds usize"),
-            )
-        })?;
-        let two_names_len = 2 * variable_name_len;
-        let value_len = total_length_usize
-            .checked_sub(two_names_len)
-            .ok_or_else(|| {
-                DtaError::format(
-                    Section::Characteristics,
-                    entry_position,
-                    FormatErrorKind::Truncated {
-                        expected: u64::try_from(two_names_len).unwrap_or(u64::MAX),
-                        actual: u64::from(total_length),
-                    },
-                )
-            })?;
-
+        let value_len = characteristic_value_len(total_length, variable_name_len, entry_position)?;
         let value = self.state.read_fixed_string(
             value_len,
             encoding,

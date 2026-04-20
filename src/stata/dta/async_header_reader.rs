@@ -342,6 +342,9 @@ mod tests {
             .unwrap()
             .write_schema(Schema::builder().build().unwrap())
             .await
+            .unwrap()
+            .finish()
+            .await
             .unwrap();
         let bytes = cursor.into_inner();
         DtaReader::default()
@@ -524,6 +527,9 @@ mod tests {
             .await
             .unwrap()
             .write_schema(Schema::builder().build().unwrap())
+            .await
+            .unwrap()
+            .finish()
             .await
             .unwrap();
         let bytes = cursor.into_inner();

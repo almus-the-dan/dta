@@ -1,28 +1,27 @@
+use tokio::io::{AsyncSeek, AsyncWrite};
+
+use super::async_writer_state::AsyncWriterState;
+use super::byte_order::ByteOrder;
 use super::characteristic::{Characteristic, ExpansionFieldType};
 use super::characteristic_format::{encode_characteristic_value, payload_length};
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
-use super::record_writer::RecordWriter;
+use super::release::Release;
 use super::schema::Schema;
-use super::writer_state::WriterState;
-use crate::stata::dta::byte_order::ByteOrder;
-use crate::stata::dta::release::Release;
-use std::io::{Seek, Write};
 
-/// Writes characteristic (expansion-field) entries to a DTA file.
+/// Writes characteristic (expansion-field) entries to a DTA file
+/// asynchronously.
 ///
 /// Unlike the header and schema phases, characteristic writing
 /// accepts any number of entries via
 /// [`write_characteristic`](Self::write_characteristic) before
-/// transitioning via [`into_record_writer`](Self::into_record_writer).
-///
-/// The writer handles both binary and XML encodings internally:
-/// binary formats emit `(data_type, length, payload)` triples
-/// terminated by a zero-length entry; XML formats emit
-/// `<characteristics>` / `<ch>` tags.
+/// transitioning via [`finish`](Self::finish). Handles both binary
+/// and XML encodings internally: binary emits
+/// `(data_type, length, payload)` triples terminated by a zero-length
+/// entry; XML emits `<characteristics>` / `<ch>` tags.
 #[derive(Debug)]
-pub struct CharacteristicWriter<W> {
-    state: WriterState<W>,
+pub struct AsyncCharacteristicWriter<W> {
+    state: AsyncWriterState<W>,
     header: Header,
     schema: Schema,
     /// Tracks whether the XML `<characteristics>` opening tag has
@@ -31,9 +30,9 @@ pub struct CharacteristicWriter<W> {
     opened: bool,
 }
 
-impl<W> CharacteristicWriter<W> {
+impl<W> AsyncCharacteristicWriter<W> {
     #[must_use]
-    pub(crate) fn new(state: WriterState<W>, header: Header, schema: Schema) -> Self {
+    pub(crate) fn new(state: AsyncWriterState<W>, header: Header, schema: Schema) -> Self {
         Self {
             state,
             header,
@@ -56,22 +55,20 @@ impl<W> CharacteristicWriter<W> {
         &self.schema
     }
 
-    /// Consumes the writer and returns the underlying state. Used
-    /// exclusively by `characteristic_reader` tests that need a
+    /// Consumes the writer and returns the underlying sink. Used
+    /// exclusively by `async_characteristic_reader` tests that need a
     /// partially written file — they drive the writer up through
     /// `write_schema` and then append hand-crafted expansion-field
     /// bytes (e.g., unknown `data_type` values the writer would never
     /// emit on its own) to exercise the reader's forward-compat
-    /// skipping logic. All other test paths now chain through
-    /// [`ValueLabelWriter::finish`](super::value_label_writer::ValueLabelWriter::finish)
-    /// instead.
+    /// skipping logic.
     #[cfg(test)]
-    pub(crate) fn into_state(self) -> WriterState<W> {
-        self.state
+    pub(crate) fn into_inner(self) -> W {
+        self.state.into_inner()
     }
 }
 
-impl<W: Write + Seek> CharacteristicWriter<W> {
+impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     /// Writes a single characteristic entry.
     ///
     /// Can be called any number of times (including zero). The first
@@ -84,10 +81,10 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     /// with [`CharacteristicsUnsupported`](FormatErrorKind::CharacteristicsUnsupported)
     /// if the header's release is V104 (which has no expansion-field
     /// section), [`InvalidEncoding`](FormatErrorKind::InvalidEncoding)
-    /// if the name or value contains bytes the active encoding
-    /// cannot represent, and [`FieldTooLarge`](FormatErrorKind::FieldTooLarge)
+    /// if the name or value contains bytes the active encoding cannot
+    /// represent, and [`FieldTooLarge`](FormatErrorKind::FieldTooLarge)
     /// if the entry exceeds the format's length ceiling.
-    pub fn write_characteristic(&mut self, characteristic: &Characteristic) -> Result<()> {
+    pub async fn write_characteristic(&mut self, characteristic: &Characteristic) -> Result<()> {
         let release = self.header.release();
         let Some(is_extended) = release.supports_extended_expansion() else {
             return Err(DtaError::format(
@@ -97,15 +94,15 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
             ));
         };
         if release.is_xml_like() {
-            self.open_section_if_needed()?;
-            self.write_xml_entry(characteristic)
+            self.open_section_if_needed().await?;
+            self.write_xml_entry(characteristic).await
         } else {
-            self.write_binary_entry(characteristic, is_extended)
+            self.write_binary_entry(characteristic, is_extended).await
         }
     }
 
     /// Closes the characteristics section, patches the data offset
-    /// in the map (XML only), and transitions to record writing.
+    /// in the map (XML only), and returns the underlying writer.
     ///
     /// For XML the closing `</characteristics>` tag is emitted even
     /// if no entries were written (the opening tag is lazy-emitted
@@ -113,72 +110,79 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     /// zero-length terminator entry is written. V104 has no
     /// expansion-field section at all, so nothing is written.
     ///
+    /// POC-shaped terminal: once the async record writer exists this
+    /// will return `AsyncRecordWriter<W>` and advance the typestate
+    /// chain.
+    ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on
-    /// sink failures.
-    pub fn into_record_writer(mut self) -> Result<RecordWriter<W>> {
+    /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
+    pub async fn finish(mut self) -> Result<W> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
 
         if let Some(is_extended) = release.supports_extended_expansion() {
-            self.write_terminator(release, is_extended, byte_order)?;
+            self.write_terminator(release, is_extended, byte_order)
+                .await?;
         }
-        // V104 has no expansion-field section at all — nothing to close.
 
         if release.is_xml_like() {
             let records_offset = self.state.position();
             self.state
-                .patch_map_entry(9, records_offset, byte_order, Section::Characteristics)?;
+                .patch_map_entry(9, records_offset, byte_order, Section::Characteristics)
+                .await?;
         }
 
-        Ok(RecordWriter::new(self.state, self.header, self.schema))
+        Ok(self.state.into_inner())
     }
 
-    fn write_terminator(
+    async fn write_terminator(
         &mut self,
         release: Release,
         is_extended: bool,
         byte_order: ByteOrder,
     ) -> Result<()> {
         if release.is_xml_like() {
-            self.open_section_if_needed()?;
+            self.open_section_if_needed().await?;
             self.state
-                .write_exact(b"</characteristics>", Section::Characteristics)?;
+                .write_exact(b"</characteristics>", Section::Characteristics)
+                .await?;
         } else {
-            // Binary terminator: data_type = 0, length = 0.
-            self.state.write_u8(
-                ExpansionFieldType::Terminator.to_byte(),
-                Section::Characteristics,
-            )?;
+            self.state
+                .write_u8(
+                    ExpansionFieldType::Terminator.to_byte(),
+                    Section::Characteristics,
+                )
+                .await?;
             if is_extended {
                 self.state
-                    .write_u32(0, byte_order, Section::Characteristics)?;
+                    .write_u32(0, byte_order, Section::Characteristics)
+                    .await?;
             } else {
                 self.state
-                    .write_u16(0, byte_order, Section::Characteristics)?;
+                    .write_u16(0, byte_order, Section::Characteristics)
+                    .await?;
             }
         }
         Ok(())
     }
 
-    /// Emits the XML `<characteristics>` tag on first use. No-op for
-    /// binary formats (which have no opening tag) and on later calls.
-    fn open_section_if_needed(&mut self) -> Result<()> {
+    async fn open_section_if_needed(&mut self) -> Result<()> {
         debug_assert!(self.header.release().is_xml_like());
         if !self.opened {
             self.state
-                .write_exact(b"<characteristics>", Section::Characteristics)?;
+                .write_exact(b"<characteristics>", Section::Characteristics)
+                .await?;
             self.opened = true;
         }
         Ok(())
     }
 }
 
-impl<W: Write> CharacteristicWriter<W> {
+impl<W: AsyncWrite + Unpin> AsyncCharacteristicWriter<W> {
     /// Emits one `<ch>` entry: `<ch>` | `u32 payload_len` | payload |
     /// `</ch>`.
-    fn write_xml_entry(&mut self, characteristic: &Characteristic) -> Result<()> {
+    async fn write_xml_entry(&mut self, characteristic: &Characteristic) -> Result<()> {
         let byte_order = self.header.byte_order();
         let encoded_value = encode_characteristic_value(
             characteristic.value(),
@@ -191,18 +195,22 @@ impl<W: Write> CharacteristicWriter<W> {
             self.state.position(),
         )?;
 
-        self.state.write_exact(b"<ch>", Section::Characteristics)?;
         self.state
-            .write_u32(payload_len, byte_order, Section::Characteristics)?;
-        self.write_payload(characteristic, &encoded_value)?;
-        self.state.write_exact(b"</ch>", Section::Characteristics)?;
+            .write_exact(b"<ch>", Section::Characteristics)
+            .await?;
+        self.state
+            .write_u32(payload_len, byte_order, Section::Characteristics)
+            .await?;
+        self.write_payload(characteristic, &encoded_value).await?;
+        self.state
+            .write_exact(b"</ch>", Section::Characteristics)
+            .await?;
         Ok(())
     }
 
     /// Emits one binary expansion-field triple: `u8 data_type=1` |
-    /// `u16/u32 payload_len` | payload. `is_extended` selects the
-    /// 4-byte (`true`) vs 2-byte (`false`) length field.
-    fn write_binary_entry(
+    /// `u16/u32 payload_len` | payload.
+    async fn write_binary_entry(
         &mut self,
         characteristic: &Characteristic,
         is_extended: bool,
@@ -219,13 +227,16 @@ impl<W: Write> CharacteristicWriter<W> {
             self.state.position(),
         )?;
 
-        self.state.write_u8(
-            ExpansionFieldType::Characteristic.to_byte(),
-            Section::Characteristics,
-        )?;
+        self.state
+            .write_u8(
+                ExpansionFieldType::Characteristic.to_byte(),
+                Section::Characteristics,
+            )
+            .await?;
         if is_extended {
             self.state
-                .write_u32(payload_len, byte_order, Section::Characteristics)?;
+                .write_u32(payload_len, byte_order, Section::Characteristics)
+                .await?;
         } else {
             let narrow = self.state.narrow_to_u16(
                 payload_len,
@@ -233,58 +244,55 @@ impl<W: Write> CharacteristicWriter<W> {
                 Field::CharacteristicValue,
             )?;
             self.state
-                .write_u16(narrow, byte_order, Section::Characteristics)?;
+                .write_u16(narrow, byte_order, Section::Characteristics)
+                .await?;
         }
-        self.write_payload(characteristic, &encoded_value)?;
+        self.write_payload(characteristic, &encoded_value).await?;
         Ok(())
     }
 
     /// Emits the three-part payload: target variable name
     /// (fixed-width, null-padded), characteristic name (same), value
     /// (variable-width, exact encoded bytes).
-    fn write_payload(
+    async fn write_payload(
         &mut self,
         characteristic: &Characteristic,
         encoded_value: &[u8],
     ) -> Result<()> {
         let variable_name_len = self.header.release().variable_name_len();
-        self.state.write_fixed_string(
-            characteristic.target().as_variable_name(),
-            variable_name_len,
-            Section::Characteristics,
-            Field::VariableName,
-        )?;
-        self.state.write_fixed_string(
-            characteristic.name(),
-            variable_name_len,
-            Section::Characteristics,
-            Field::CharacteristicName,
-        )?;
         self.state
-            .write_exact(encoded_value, Section::Characteristics)?;
+            .write_fixed_string(
+                characteristic.target().as_variable_name(),
+                variable_name_len,
+                Section::Characteristics,
+                Field::VariableName,
+            )
+            .await?;
+        self.state
+            .write_fixed_string(
+                characteristic.name(),
+                variable_name_len,
+                Section::Characteristics,
+                Field::CharacteristicName,
+            )
+            .await?;
+        self.state
+            .write_exact(encoded_value, Section::Characteristics)
+            .await?;
         Ok(())
     }
 }
-
-// ===========================================================================
-// Tests
-// ===========================================================================
 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::characteristic::CharacteristicTarget;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
-    use crate::stata::dta::release::Release;
-    use crate::stata::dta::schema::Schema;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
-
-    // -- Helpers -------------------------------------------------------------
 
     fn make_schema() -> Schema {
         Schema::builder()
@@ -299,11 +307,9 @@ mod tests {
             .build()
     }
 
-    /// Writes `characteristics` through the real writer chain, then
-    /// reads them back through the real reader chain. Both chains
-    /// are short-circuited before the record writer since that phase
-    /// is still a stub.
-    fn round_trip(
+    /// Writes `characteristics` through the async writer chain, then
+    /// reads them back through the async reader chain.
+    async fn round_trip(
         release: Release,
         byte_order: ByteOrder,
         characteristics: &[Characteristic],
@@ -311,35 +317,30 @@ mod tests {
         let schema = make_schema();
         let header = make_header(release, byte_order, &schema);
 
-        let buffer = Cursor::new(Vec::<u8>::new());
-        let mut characteristic_writer = DtaWriter::new()
-            .from_writer(buffer)
+        let mut writer = DtaWriter::new()
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         for entry in characteristics {
-            characteristic_writer.write_characteristic(entry).unwrap();
+            writer.write_characteristic(entry).await.unwrap();
         }
-        let bytes = characteristic_writer
-            .into_record_writer()
-            .unwrap()
-            .into_long_string_writer()
-            .unwrap()
-            .into_value_label_writer()
-            .unwrap()
-            .finish()
-            .unwrap()
-            .into_inner();
+        let cursor: Cursor<Vec<u8>> = writer.finish().await.unwrap();
+        let bytes = cursor.into_inner();
 
         let mut reader = DtaReader::new()
-            .from_reader(Cursor::new(bytes))
+            .from_tokio_reader(bytes.as_slice())
             .read_header()
+            .await
             .unwrap()
             .read_schema()
+            .await
             .unwrap();
         let mut parsed = Vec::new();
-        while let Some(entry) = reader.read_characteristic().unwrap() {
+        while let Some(entry) = reader.read_characteristic().await.unwrap() {
             parsed.push(entry);
         }
         parsed
@@ -347,28 +348,28 @@ mod tests {
 
     // -- Binary round-trips (formats 105–116) --------------------------------
 
-    #[test]
-    fn binary_v114_dataset_characteristic_round_trip() {
+    #[tokio::test]
+    async fn binary_v114_dataset_characteristic_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "note1".to_owned(),
             "created for regression".to_owned(),
         );
-        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[entry]);
+        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[entry]).await;
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].target(), &CharacteristicTarget::Dataset);
         assert_eq!(parsed[0].name(), "note1");
         assert_eq!(parsed[0].value(), "created for regression");
     }
 
-    #[test]
-    fn binary_v114_variable_characteristic_round_trip() {
+    #[tokio::test]
+    async fn binary_v114_variable_characteristic_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Variable("mpg".to_owned()),
             "format_hint".to_owned(),
             "miles/gallon".to_owned(),
         );
-        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[entry]);
+        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[entry]).await;
         assert_eq!(parsed.len(), 1);
         assert_eq!(
             parsed[0].target(),
@@ -377,8 +378,8 @@ mod tests {
         assert_eq!(parsed[0].value(), "miles/gallon");
     }
 
-    #[test]
-    fn binary_v114_multiple_characteristics_round_trip() {
+    #[tokio::test]
+    async fn binary_v114_multiple_characteristics_round_trip() {
         let entries = vec![
             Characteristic::new(
                 CharacteristicTarget::Dataset,
@@ -396,50 +397,47 @@ mod tests {
                 String::new(),
             ),
         ];
-        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &entries);
+        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &entries).await;
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0].name(), "first");
         assert_eq!(parsed[1].name(), "second");
         assert_eq!(parsed[2].value(), "");
     }
 
-    #[test]
-    fn binary_v106_u16_length_round_trip() {
-        // V106 uses a u16 expansion length field — exercise the
-        // narrow-to-u16 path.
+    #[tokio::test]
+    async fn binary_v106_u16_length_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "note".to_owned(),
             "x".repeat(50),
         );
-        let parsed = round_trip(Release::V106, ByteOrder::LittleEndian, &[entry]);
+        let parsed = round_trip(Release::V106, ByteOrder::LittleEndian, &[entry]).await;
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].value().len(), 50);
     }
 
-    #[test]
-    fn binary_v114_big_endian_round_trip() {
+    #[tokio::test]
+    async fn binary_v114_big_endian_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "be".to_owned(),
             "big-endian value".to_owned(),
         );
-        let parsed = round_trip(Release::V114, ByteOrder::BigEndian, &[entry]);
+        let parsed = round_trip(Release::V114, ByteOrder::BigEndian, &[entry]).await;
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].value(), "big-endian value");
     }
 
-    #[test]
-    fn binary_v114_zero_characteristics_round_trip() {
-        // Terminator-only section must still parse cleanly.
-        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[]);
+    #[tokio::test]
+    async fn binary_v114_zero_characteristics_round_trip() {
+        let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, &[]).await;
         assert!(parsed.is_empty());
     }
 
     // -- XML round-trips (formats 117–119) -----------------------------------
 
-    #[test]
-    fn xml_v117_round_trip() {
+    #[tokio::test]
+    async fn xml_v117_round_trip() {
         let entries = vec![
             Characteristic::new(
                 CharacteristicTarget::Dataset,
@@ -452,7 +450,7 @@ mod tests {
                 "world".to_owned(),
             ),
         ];
-        let parsed = round_trip(Release::V117, ByteOrder::LittleEndian, &entries);
+        let parsed = round_trip(Release::V117, ByteOrder::LittleEndian, &entries).await;
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].target(), &CharacteristicTarget::Dataset);
         assert_eq!(parsed[0].value(), "hello");
@@ -462,55 +460,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn xml_v117_big_endian_round_trip() {
+    #[tokio::test]
+    async fn xml_v117_big_endian_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "msf".to_owned(),
             "big endian XML".to_owned(),
         );
-        let parsed = round_trip(Release::V117, ByteOrder::BigEndian, &[entry]);
+        let parsed = round_trip(Release::V117, ByteOrder::BigEndian, &[entry]).await;
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].value(), "big endian XML");
     }
 
-    #[test]
-    fn xml_v117_zero_characteristics_round_trip() {
-        // Opening and closing tags must still be emitted so the
-        // reader sees an empty-but-present section.
-        let parsed = round_trip(Release::V117, ByteOrder::LittleEndian, &[]);
+    #[tokio::test]
+    async fn xml_v117_zero_characteristics_round_trip() {
+        let parsed = round_trip(Release::V117, ByteOrder::LittleEndian, &[]).await;
         assert!(parsed.is_empty());
     }
 
-    #[test]
-    fn xml_v118_utf8_value_round_trip() {
+    #[tokio::test]
+    async fn xml_v118_utf8_value_round_trip() {
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "note".to_owned(),
             "日本語".to_owned(),
         );
-        let parsed = round_trip(Release::V118, ByteOrder::LittleEndian, &[entry]);
+        let parsed = round_trip(Release::V118, ByteOrder::LittleEndian, &[entry]).await;
         assert_eq!(parsed[0].value(), "日本語");
     }
 
     // -- Error cases ---------------------------------------------------------
 
-    #[test]
-    fn v104_rejects_characteristic() {
+    #[tokio::test]
+    async fn v104_rejects_characteristic() {
         let schema = make_schema();
         let header = make_header(Release::V104, ByteOrder::LittleEndian, &schema);
         let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "n".to_owned(),
             "v".to_owned(),
         );
-        let error = writer.write_characteristic(&entry).unwrap_err();
+        let error = writer.write_characteristic(&entry).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -520,38 +518,37 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn v104_zero_characteristics_transitions_cleanly() {
-        // V104 has no expansion-field section, so a caller that
-        // writes zero characteristics must still be able to
-        // transition to record writing.
+    #[tokio::test]
+    async fn v104_zero_characteristics_transitions_cleanly() {
         let schema = make_schema();
         let header = make_header(Release::V104, ByteOrder::LittleEndian, &schema);
         let writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         // Should not panic or error.
-        let _record_writer = writer.into_record_writer().unwrap();
+        let _cursor: Cursor<Vec<u8>> = writer.finish().await.unwrap();
     }
 
-    #[test]
-    fn binary_v106_oversize_value_errors() {
-        // V106's expansion length field is u16, so a payload
-        // exceeding u16::MAX must narrow-fail.
+    #[tokio::test]
+    async fn binary_v106_oversize_value_errors() {
         let schema = make_schema();
         let header = make_header(Release::V106, ByteOrder::LittleEndian, &schema);
         let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         let huge_value = "x".repeat(usize::from(u16::MAX));
         let entry = Characteristic::new(CharacteristicTarget::Dataset, "n".to_owned(), huge_value);
-        let error = writer.write_characteristic(&entry).unwrap_err();
+        let error = writer.write_characteristic(&entry).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -561,22 +558,24 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn non_latin_value_in_windows_1252_errors() {
+    #[tokio::test]
+    async fn non_latin_value_in_windows_1252_errors() {
         let schema = make_schema();
         let header = make_header(Release::V114, ByteOrder::LittleEndian, &schema);
         let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "n".to_owned(),
             "日本語".to_owned(),
         );
-        let error = writer.write_characteristic(&entry).unwrap_err();
+        let error = writer.write_characteristic(&entry).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -586,24 +585,24 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn characteristic_name_too_long_errors() {
-        // V114 limits variable names (used for both target and
-        // characteristic-name fields) to 33 bytes.
+    #[tokio::test]
+    async fn characteristic_name_too_long_errors() {
         let schema = make_schema();
         let header = make_header(Release::V114, ByteOrder::LittleEndian, &schema);
         let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
+            .await
             .unwrap()
             .write_schema(schema)
+            .await
             .unwrap();
         let entry = Characteristic::new(
             CharacteristicTarget::Dataset,
             "n".repeat(50),
             "v".to_owned(),
         );
-        let error = writer.write_characteristic(&entry).unwrap_err();
+        let error = writer.write_characteristic(&entry).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(

@@ -1,5 +1,6 @@
 use tokio::io::AsyncRead;
 
+use super::async_characteristic_reader::AsyncCharacteristicReader;
 use super::async_reader_state::AsyncReaderState;
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
@@ -42,22 +43,20 @@ impl<R> AsyncSchemaReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
-    /// Parses variable definitions and returns the resulting [`Schema`].
+    /// Parses variable definitions and transitions to characteristic
+    /// reading.
     ///
     /// Reads type codes, variable names, sort order, display formats,
     /// value-label associations, and variable labels. For XML formats,
-    /// also reads the section map.
-    ///
-    /// POC-shaped terminal: once the remaining async stages exist this
-    /// will return `AsyncCharacteristicReader<R>` and advance the
-    /// typestate chain instead of returning the schema by value.
+    /// also reads the section map. The stream is left positioned at
+    /// the start of the characteristics section.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures and
     /// [`DtaError::Format`] when the schema bytes violate the DTA
     /// format specification.
-    pub async fn read_schema(mut self) -> Result<Schema> {
+    pub async fn read_schema(mut self) -> Result<AsyncCharacteristicReader<R>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let variable_count = usize::try_from(self.header.variable_count())
@@ -97,7 +96,11 @@ impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
             .variables(variables)
             .sort_order(sort_order)
             .build()?;
-        Ok(schema)
+        Ok(AsyncCharacteristicReader::new(
+            self.state,
+            self.header,
+            schema,
+        ))
     }
 }
 
@@ -341,6 +344,9 @@ mod tests {
             .unwrap()
             .write_schema(schema)
             .await
+            .unwrap()
+            .finish()
+            .await
             .unwrap();
         let bytes = cursor.into_inner();
         DtaReader::new()
@@ -351,6 +357,8 @@ mod tests {
             .read_schema()
             .await
             .unwrap()
+            .schema()
+            .clone()
     }
 
     fn make_header(release: Release, byte_order: ByteOrder, schema: &Schema) -> Header {

@@ -1,5 +1,6 @@
 use tokio::io::{AsyncSeek, AsyncWrite};
 
+use super::async_characteristic_writer::AsyncCharacteristicWriter;
 use super::async_writer_state::AsyncWriterState;
 use super::byte_order::ByteOrder;
 use super::dta_error::{Field, Result, Section};
@@ -40,15 +41,11 @@ impl<W> AsyncSchemaWriter<W> {
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncSchemaWriter<W> {
     /// Writes the `<map>` (XML only) and variable descriptor
-    /// subsections, then returns the underlying writer.
+    /// subsections, then transitions to characteristic writing.
     ///
     /// Patches the header K (variable count) field with
     /// `schema.variables().len()` via seek before emitting any schema
     /// bytes, so overflow surfaces before the file gets polluted.
-    ///
-    /// POC-shaped terminal: once the async characteristic/record/etc
-    /// writers exist this will return `AsyncCharacteristicWriter<W>`
-    /// instead of the underlying writer.
     ///
     /// # Errors
     ///
@@ -57,7 +54,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncSchemaWriter<W> {
     /// if the schema cannot be represented in the header's release
     /// (e.g., `strL` columns in a pre-117 format, or variable names
     /// that exceed the fixed-field width).
-    pub async fn write_schema(mut self, schema: Schema) -> Result<W> {
+    pub async fn write_schema(mut self, schema: Schema) -> Result<AsyncCharacteristicWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let is_xml = release.is_xml_like();
@@ -134,7 +131,11 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncSchemaWriter<W> {
 
         self.finalize_schema_section(&descriptor_offsets).await?;
 
-        Ok(self.state.into_inner())
+        Ok(AsyncCharacteristicWriter::new(
+            self.state,
+            self.header,
+            schema,
+        ))
     }
 
     /// Seek-patches the header's K (variable count) field with
@@ -318,6 +319,9 @@ mod tests {
             .unwrap()
             .write_schema(schema)
             .await
+            .unwrap()
+            .finish()
+            .await
             .unwrap();
         let bytes = cursor.into_inner();
 
@@ -327,7 +331,8 @@ mod tests {
             .await
             .unwrap();
         let parsed_header = schema_reader.header().clone();
-        let parsed_schema = schema_reader.read_schema().await.unwrap();
+        let char_reader = schema_reader.read_schema().await.unwrap();
+        let parsed_schema = char_reader.schema().clone();
 
         let expected_k =
             u32::try_from(parsed_schema.variables().len()).expect("variable count fits u32");
