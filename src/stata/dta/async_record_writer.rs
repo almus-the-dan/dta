@@ -1,5 +1,6 @@
 use tokio::io::{AsyncSeek, AsyncWrite};
 
+use super::async_long_string_writer::AsyncLongStringWriter;
 use super::async_writer_state::AsyncWriterState;
 use super::byte_order::ByteOrder;
 use super::dta_error::{Field, Result, Section};
@@ -105,13 +106,9 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
         Ok(())
     }
 
-    /// Closes the data section, patches map slot 10 (XML only), and
+    /// Closes the data section, patches map slot 10 (XML only),
     /// seek-patches the header N field with the accumulated
-    /// observation count.
-    ///
-    /// POC-shaped terminal: once the async long-string writer exists
-    /// this will return `AsyncLongStringWriter<W>` and advance the
-    /// typestate chain.
+    /// observation count, and transitions to long-string writing.
     ///
     /// # Errors
     ///
@@ -124,7 +121,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
     ///
     /// Panics if the header writer did not capture the N offset — an
     /// internal invariant of the writer chain.
-    pub async fn finish(mut self) -> Result<W> {
+    pub async fn into_long_string_writer(mut self) -> Result<AsyncLongStringWriter<W>> {
         self.open_section_if_needed().await?;
 
         let release = self.header.release();
@@ -139,7 +136,11 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
 
         self.patch_header_observation_count().await?;
 
-        Ok(self.state.into_inner())
+        Ok(AsyncLongStringWriter::new(
+            self.state,
+            self.header,
+            self.schema,
+        ))
     }
 
     async fn open_section_if_needed(&mut self) -> Result<()> {
@@ -363,7 +364,13 @@ mod tests {
         for values in &records {
             record_writer.write_record(values).await.unwrap();
         }
-        let cursor: Cursor<Vec<u8>> = record_writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = record_writer
+            .into_long_string_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
 
         let characteristic_reader = DtaReader::new()
@@ -616,7 +623,13 @@ mod tests {
         for values in &records {
             writer.write_record(values).await.unwrap();
         }
-        let cursor: Cursor<Vec<u8>> = writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = writer
+            .into_long_string_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
         let header = DtaReader::new()
             .from_tokio_reader(bytes.as_slice())

@@ -10,6 +10,12 @@ pub mod async_header_reader;
 /// Async entry point for writing a DTA file (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_header_writer;
+/// Async reader for long-string (strL) entries (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_long_string_reader;
+/// Async writer for long-string (strL) entries (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_long_string_writer;
 #[cfg(feature = "tokio")]
 mod async_reader_state;
 /// Async reader for observation records (tokio feature).
@@ -54,6 +60,8 @@ pub mod header_writer;
 pub mod lazy_record;
 /// Decoded long string (strL) entry.
 pub mod long_string;
+mod long_string_format;
+mod long_string_parse;
 /// Reads long string (strL) entries (format 118+ only).
 pub mod long_string_reader;
 /// Unresolved reference to a long string in the strL section.

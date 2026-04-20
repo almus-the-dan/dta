@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use super::long_string::LongString;
 use super::long_string_ref::LongStringRef;
-use super::long_string_writer::LongStringWriter;
 
 /// Deduplicating table of long string (strL / GSO) payloads, used
 /// while preparing records for a DTA writer.
@@ -115,16 +114,16 @@ impl LongStringTable {
     /// ready to be passed to
     /// [`LongStringWriter::write_long_string`].
     ///
-    /// The `writer` argument is used once, synchronously, to capture
-    /// the file's encoding for the resulting [`LongString`] values.
-    /// The returned iterator borrows `self` but not the writer, so
-    /// callers can freely invoke `write_long_string` inside the
-    /// loop.
-    pub fn iter<'a, W>(
+    /// The `encoding` argument is the writer's active encoding — it
+    /// decorates each yielded [`LongString`] so callers can round-trip
+    /// payload bytes through [`LongString::data_str`] without plumbing
+    /// the encoding separately. The returned iterator borrows `self`
+    /// and nothing else, so callers can freely invoke
+    /// `write_long_string` inside the loop.
+    pub fn iter<'a>(
         &'a self,
-        writer: &LongStringWriter<W>,
+        encoding: &'static encoding_rs::Encoding,
     ) -> impl Iterator<Item = LongString<'a>> + 'a {
-        let encoding = writer.encoding();
         self.position
             .iter()
             .map(move |(&(variable, observation), entry)| {
@@ -141,23 +140,9 @@ impl LongStringTable {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
     use encoding_rs::{UTF_8, WINDOWS_1252};
 
     use super::*;
-    use crate::stata::dta::byte_order::ByteOrder;
-    use crate::stata::dta::header::Header;
-    use crate::stata::dta::release::Release;
-    use crate::stata::dta::schema::Schema;
-    use crate::stata::dta::writer_state::WriterState;
-
-    fn dummy_writer(encoding: &'static encoding_rs::Encoding) -> LongStringWriter<Cursor<Vec<u8>>> {
-        let state = WriterState::new(Cursor::new(Vec::new()), encoding);
-        let header = Header::builder(Release::V118, ByteOrder::LittleEndian).build();
-        let schema = Schema::builder().build().unwrap();
-        LongStringWriter::new(state, header, schema)
-    }
 
     #[test]
     fn new_is_empty() {
@@ -224,9 +209,8 @@ mod tests {
         table.get_or_insert(2, 5, b"b5", false);
         table.get_or_insert(1, 1, b"a1", false);
 
-        let writer = dummy_writer(UTF_8);
         let ordered: Vec<(u32, u64)> = table
-            .iter(&writer)
+            .iter(UTF_8)
             .map(|ls| (ls.variable(), ls.observation()))
             .collect();
         assert_eq!(ordered, vec![(1, 1), (1, 2), (2, 5), (3, 1)]);
@@ -237,9 +221,8 @@ mod tests {
         let mut table = LongStringTable::new();
         table.get_or_insert(1, 1, b"text", false);
         table.get_or_insert(2, 2, b"\x00\x01", true);
-        let writer = dummy_writer(UTF_8);
 
-        let long_strings: Vec<_> = table.iter(&writer).collect();
+        let long_strings: Vec<_> = table.iter(UTF_8).collect();
         assert_eq!(long_strings[0].data(), b"text");
         assert!(!long_strings[0].is_binary());
         assert_eq!(long_strings[1].data(), b"\x00\x01");
@@ -247,14 +230,13 @@ mod tests {
     }
 
     #[test]
-    fn iter_captures_writer_encoding() {
+    fn iter_captures_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
         let mut table = LongStringTable::new();
         table.get_or_insert(1, 1, b"\x80", false);
 
-        let writer = dummy_writer(WINDOWS_1252);
         let decoded = table
-            .iter(&writer)
+            .iter(WINDOWS_1252)
             .next()
             .unwrap()
             .data_str()
@@ -262,33 +244,6 @@ mod tests {
             .into_owned();
         assert_eq!(decoded, "€");
 
-        let utf8_writer = dummy_writer(UTF_8);
-        assert!(
-            table
-                .iter(&utf8_writer)
-                .next()
-                .unwrap()
-                .data_str()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn iter_does_not_hold_writer_borrow() {
-        // Proves the iter() / write_long_string() loop pattern
-        // compiles: iter borrows &writer briefly, but the returned
-        // iterator only borrows &self (the table), leaving the writer
-        // free to be moved (and thus mutated) after iter returns.
-        let mut table = LongStringTable::new();
-        table.get_or_insert(1, 1, b"x", false);
-        let writer = dummy_writer(UTF_8);
-        let refs: Vec<_> = table
-            .iter(&writer)
-            .map(|ls| (ls.variable(), ls.observation()))
-            .collect();
-        // Moving `writer` here is only possible if iter() left no
-        // outstanding borrow of it.
-        drop(writer);
-        assert_eq!(refs, vec![(1, 1)]);
+        assert!(table.iter(UTF_8).next().unwrap().data_str().is_none());
     }
 }

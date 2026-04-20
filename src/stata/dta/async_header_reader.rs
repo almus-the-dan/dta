@@ -346,6 +346,9 @@ mod tests {
             .into_record_writer()
             .await
             .unwrap()
+            .into_long_string_writer()
+            .await
+            .unwrap()
             .finish()
             .await
             .unwrap();
@@ -533,6 +536,9 @@ mod tests {
             .await
             .unwrap()
             .into_record_writer()
+            .await
+            .unwrap()
+            .into_long_string_writer()
             .await
             .unwrap()
             .finish()

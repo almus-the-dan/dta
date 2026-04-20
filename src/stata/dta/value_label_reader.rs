@@ -255,14 +255,9 @@ impl<R: BufRead> ValueLabelReader<R> {
             self.opened = true;
         }
 
-        if is_xml {
-            match self.read_xml_label_or_close()? {
-                XmlLabelTag::EntryOpen => {}
-                XmlLabelTag::SectionClose => {
-                    self.completed = true;
-                    return Ok(None);
-                }
-            }
+        if is_xml && let XmlLabelTag::SectionClose = self.read_xml_label_or_close()? {
+            self.completed = true;
+            return Ok(None);
         }
 
         let Some(table_len) = self.state.try_read_u32(byte_order, Section::ValueLabels)? else {

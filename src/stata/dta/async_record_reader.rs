@@ -1,5 +1,6 @@
 use tokio::io::AsyncRead;
 
+use super::async_long_string_reader::AsyncLongStringReader;
 use super::async_reader_state::AsyncReaderState;
 use super::dta_error::{FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -126,19 +127,19 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
         Ok(())
     }
 
-    /// Consumes any remaining records and closes out the data
-    /// section.
-    ///
-    /// POC-shaped terminal: once the async long-string reader exists
-    /// this will return `AsyncLongStringReader<R>` and advance the
-    /// typestate chain.
+    /// Consumes any remaining records and transitions to long-string
+    /// reading.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures.
-    pub async fn finish(mut self) -> Result<()> {
+    pub async fn into_long_string_reader(mut self) -> Result<AsyncLongStringReader<R>> {
         self.skip_to_end().await?;
-        Ok(())
+        Ok(AsyncLongStringReader::new(
+            self.state,
+            self.header,
+            self.schema,
+        ))
     }
 }
 
@@ -240,7 +241,13 @@ mod tests {
             .await
             .unwrap();
         record_writer.write_record(&values).await.unwrap();
-        let cursor: Cursor<Vec<u8>> = record_writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = record_writer
+            .into_long_string_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
 
         let mut reader = DtaReader::new()
@@ -358,6 +365,9 @@ mod tests {
             .await
             .unwrap()
             .into_record_writer()
+            .await
+            .unwrap()
+            .into_long_string_writer()
             .await
             .unwrap()
             .finish()
