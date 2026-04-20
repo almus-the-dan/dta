@@ -148,12 +148,6 @@ impl Release {
         self >= Self::V118
     }
 
-    /// Whether this format stores a timestamp in the header.
-    #[must_use]
-    pub(crate) fn has_timestamp(self) -> bool {
-        self >= Self::V105
-    }
-
     /// Fixed-length timestamp field size for binary formats.
     ///
     /// Returns 0 for format 104 (no timestamp) and 18 for 105–116.
@@ -402,13 +396,11 @@ mod tests {
     #[test]
     fn timestamp_len_v104() {
         assert_eq!(Release::V104.timestamp_len(), 0);
-        assert!(!Release::V104.has_timestamp());
     }
 
     #[test]
     fn timestamp_len_v105_plus() {
         assert_eq!(Release::V105.timestamp_len(), 18);
-        assert!(Release::V105.has_timestamp());
         assert_eq!(Release::V116.timestamp_len(), 18);
     }
 

@@ -62,22 +62,11 @@ impl<W> WriterState<W> {
     }
 
     /// Absolute byte offset where the 14 × `u64` payload of the XML
-    /// `<map>` section was written (the first byte after the opening
-    /// `<map>` tag).
-    ///
-    /// Used by downstream writers with
-    /// [`patch_map_entry`](Self::patch_map_entry) to backfill a single
-    /// map slot once its section's real offset is known. Returns
-    /// `None` for binary formats (which have no `<map>`) and before
-    /// the schema has been written.
-    #[must_use]
-    pub fn map_offset_base(&self) -> Option<u64> {
-        self.map_offset_base
-    }
-
     /// Records where the XML `<map>` payload starts. Called by the
     /// schema writer immediately before it writes the 14 placeholder
-    /// `u64`s.
+    /// `u64`s. The recorded position is later consumed by
+    /// [`patch_map_entry`](Self::patch_map_entry) via direct field
+    /// access — there is no public getter.
     pub fn set_map_offset_base(&mut self, offset: u64) {
         self.map_offset_base = Some(offset);
     }
