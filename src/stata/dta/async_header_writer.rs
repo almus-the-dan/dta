@@ -1,6 +1,7 @@
 use encoding_rs::Encoding;
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncSeek, AsyncWrite};
 
+use super::async_schema_writer::AsyncSchemaWriter;
 use super::async_writer_state::AsyncWriterState;
 use super::byte_order::ByteOrder;
 use super::dta_error::{Field, Result, Section};
@@ -37,16 +38,16 @@ impl<W> AsyncHeaderWriter<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin> AsyncHeaderWriter<W> {
-    /// Writes the file header and returns the underlying writer.
+impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {
+    /// Writes the file header and transitions to schema writing.
     ///
     /// For binary formats (104–116) this emits the fixed 10-byte
     /// preamble followed by the dataset label and timestamp fields.
     /// For XML formats (117+) this emits the `<stata_dta><header>`
     /// opening tags and the `<release>`, `<byteorder>`, `<K>`, `<N>`,
     /// `<label>`, and `<timestamp>` fields with zero placeholders for
-    /// K and N (to be patched by the schema/record writers once those
-    /// stages exist on the async side).
+    /// K and N. K is patched by the schema writer; N is patched by
+    /// the record writer (once that stage exists on the async side).
     ///
     /// # Errors
     ///
@@ -54,7 +55,7 @@ impl<W: AsyncWrite + Unpin> AsyncHeaderWriter<W> {
     /// sink failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
     /// if the [`Header`] contains values the target format cannot
     /// represent.
-    pub async fn write_header(mut self, header: Header) -> Result<W> {
+    pub async fn write_header(mut self, header: Header) -> Result<AsyncSchemaWriter<W>> {
         let release = header.release();
         let encoding = self
             .encoding_override
@@ -67,7 +68,7 @@ impl<W: AsyncWrite + Unpin> AsyncHeaderWriter<W> {
             self.write_binary_header(&header).await?;
         }
 
-        Ok(self.state.into_inner())
+        Ok(AsyncSchemaWriter::new(self.state, header))
     }
 }
 
@@ -264,25 +265,36 @@ impl<W: AsyncWrite + Unpin> AsyncHeaderWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use crate::stata::dta::dta_error::{DtaError, FormatErrorKind};
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::schema::Schema;
 
-    /// Writes `header` through the async header writer (terminal for
-    /// the POC) and reads it back via the async header reader,
-    /// returning the round-tripped header.
+    /// Writes `header` through the async header + schema writers
+    /// (with an empty schema, terminal for the POC) and reads the
+    /// header back via the async header reader, returning the
+    /// round-tripped header. The empty schema gets K=0 patched into
+    /// the header, matching the zero the reader sees.
     async fn round_trip(header: &Header) -> Header {
-        let bytes: Vec<u8> = DtaWriter::new()
-            .from_tokio_writer(Vec::<u8>::new())
+        let cursor: Cursor<Vec<u8>> = DtaWriter::new()
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header.clone())
             .await
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .await
             .unwrap();
+        let bytes = cursor.into_inner();
         DtaReader::new()
             .from_tokio_reader(bytes.as_slice())
             .read_header()
             .await
             .unwrap()
+            .header()
+            .clone()
     }
 
     // -- Binary header round-trips (formats 104–116) -------------------------
@@ -362,7 +374,7 @@ mod tests {
             .dataset_label(long_label)
             .build();
         let error = DtaWriter::new()
-            .from_tokio_writer(Vec::<u8>::new())
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
             .await
             .unwrap_err();
@@ -381,7 +393,7 @@ mod tests {
             .dataset_label("日本語")
             .build();
         let error = DtaWriter::new()
-            .from_tokio_writer(Vec::<u8>::new())
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
             .await
             .unwrap_err();
@@ -399,18 +411,22 @@ mod tests {
         let header = Header::builder(Release::V114, ByteOrder::LittleEndian)
             .dataset_label("日本語")
             .build();
-        let bytes: Vec<u8> = DtaWriter::new()
+        let cursor: Cursor<Vec<u8>> = DtaWriter::new()
             .encoding(encoding_rs::UTF_8)
-            .from_tokio_writer(Vec::<u8>::new())
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header)
             .await
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .await
             .unwrap();
-        let parsed = DtaReader::new()
+        let bytes = cursor.into_inner();
+        let schema_reader = DtaReader::new()
             .encoding(encoding_rs::UTF_8)
             .from_tokio_reader(bytes.as_slice())
             .read_header()
             .await
             .unwrap();
-        assert_eq!(parsed.dataset_label(), "日本語");
+        assert_eq!(schema_reader.header().dataset_label(), "日本語");
     }
 }

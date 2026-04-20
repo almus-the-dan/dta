@@ -3,6 +3,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::section_offsets::SectionOffsets;
 use super::string_decoding::decode_fixed_string;
 
 /// Shared state carried across the async reader typestate chain.
@@ -20,6 +21,7 @@ pub(crate) struct AsyncReaderState<R> {
     encoding: &'static Encoding,
     buffer: Vec<u8>,
     position: u64,
+    section_offsets: Option<SectionOffsets>,
 }
 
 // -- Construction and accessors ----------------------------------------------
@@ -33,11 +35,12 @@ impl<R> AsyncReaderState<R> {
             encoding,
             buffer: Vec::new(),
             position: 0,
+            section_offsets: None,
         }
     }
 
     /// Returns a new state with the given encoding, preserving the
-    /// reader, buffer allocation, and position.
+    /// reader, buffer allocation, position, and section offsets.
     #[must_use]
     pub fn with_encoding(self, encoding: &'static Encoding) -> Self {
         Self { encoding, ..self }
@@ -53,6 +56,25 @@ impl<R> AsyncReaderState<R> {
     #[must_use]
     pub fn encoding(&self) -> &'static Encoding {
         self.encoding
+    }
+
+    /// Byte offsets for each post-schema section. Returns `None`
+    /// before the schema has been read.
+    #[must_use]
+    pub fn section_offsets(&self) -> Option<&SectionOffsets> {
+        self.section_offsets.as_ref()
+    }
+
+    /// Mutable access to section offsets. Returns `None` before
+    /// schema reading.
+    pub fn section_offsets_mut(&mut self) -> Option<&mut SectionOffsets> {
+        self.section_offsets.as_mut()
+    }
+
+    /// Stores the section offsets. Called by the schema reader after
+    /// parsing the map (XML) or computing positions (binary).
+    pub fn set_section_offsets(&mut self, offsets: SectionOffsets) {
+        self.section_offsets = Some(offsets);
     }
 }
 

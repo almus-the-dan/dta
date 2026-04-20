@@ -10,7 +10,7 @@ use crate::stata::dta::header_writer::HeaderWriter;
 #[cfg(feature = "tokio")]
 use crate::stata::dta::async_header_writer::AsyncHeaderWriter;
 #[cfg(feature = "tokio")]
-use tokio::io::{AsyncWrite, BufWriter as TokioBufWriter};
+use tokio::io::{AsyncSeek, AsyncWrite, BufWriter as TokioBufWriter};
 
 /// Builder for configuring and opening a DTA file writer.
 ///
@@ -131,10 +131,17 @@ impl DtaWriter {
 
     /// Begins writing a DTA file to any async writer, returning an
     /// [`AsyncHeaderWriter`] for the first phase of writing.
+    ///
+    /// The writer chain requires `AsyncSeek` so the XML `<map>` slots
+    /// and the header's K/N placeholders can be patched in place once
+    /// each section's real offset or count is known.
     //noinspection RsSelfConvention
     #[must_use]
     #[inline]
-    pub fn from_tokio_writer<W: AsyncWrite + Unpin>(self, writer: W) -> AsyncHeaderWriter<W> {
+    pub fn from_tokio_writer<W: AsyncWrite + AsyncSeek + Unpin>(
+        self,
+        writer: W,
+    ) -> AsyncHeaderWriter<W> {
         AsyncHeaderWriter::new(writer, self.encoding)
     }
 }

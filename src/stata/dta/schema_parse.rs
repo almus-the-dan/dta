@@ -1,0 +1,148 @@
+//! Pure parse helpers shared by the sync and async schema readers.
+//!
+//! Each function takes already-read bytes (plus the byte offset at
+//! which they were read, for error reporting) and returns the parsed
+//! value or a [`DtaError`]. The I/O itself stays in the caller so
+//! both reader flavours can reuse the same parsing logic.
+
+use super::byte_order::ByteOrder;
+use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
+use super::release::Release;
+use super::variable::{Variable, VariableBuilder};
+use super::variable_type::VariableType;
+
+/// Converts a raw type code to a [`VariableType`].
+///
+/// The interpretation depends on the format version:
+///
+/// | Formats   | Numeric codes          | String codes            |
+/// |-----------|------------------------|-------------------------|
+/// | 104–110   | ASCII `b/i/l/f/d`      | `≥ 0x7F` → len − 0x7F  |
+/// | 111–116   | `0xFB`–`0xFF`          | code = byte length      |
+/// | 117+      | `0xFFF6`–`0xFFFA`      | code = byte length      |
+/// |           | `0x8000` = strL        |                         |
+///
+/// String codes are validated against the maximum fixed-string length
+/// for the format version (80 for 104–110, 244 for 111–116, 2045 for
+/// 117+). Codes outside the valid range produce an
+/// [`InvalidVariableType`](FormatErrorKind::InvalidVariableType) error.
+pub(super) fn parse_type_code(code: u16, release: Release, position: u64) -> Result<VariableType> {
+    let invalid = || {
+        Err(DtaError::format(
+            Section::Schema,
+            position,
+            FormatErrorKind::InvalidVariableType { code },
+        ))
+    };
+
+    if release >= Release::V117 {
+        match code {
+            0xFFFA => Ok(VariableType::Byte),
+            0xFFF9 => Ok(VariableType::Int),
+            0xFFF8 => Ok(VariableType::Long),
+            0xFFF7 => Ok(VariableType::Float),
+            0xFFF6 => Ok(VariableType::Double),
+            0x8000 => Ok(VariableType::LongString),
+            1..=2045 => Ok(VariableType::FixedString(code)),
+            _ => invalid(),
+        }
+    } else if release >= Release::V111 {
+        match code {
+            0xFB => Ok(VariableType::Byte),
+            0xFC => Ok(VariableType::Int),
+            0xFD => Ok(VariableType::Long),
+            0xFE => Ok(VariableType::Float),
+            0xFF => Ok(VariableType::Double),
+            1..=244 => Ok(VariableType::FixedString(code)),
+            _ => invalid(),
+        }
+    } else {
+        match code {
+            0x62 => Ok(VariableType::Byte),   // 'b'
+            0x69 => Ok(VariableType::Int),    // 'i'
+            0x6C => Ok(VariableType::Long),   // 'l'
+            0x66 => Ok(VariableType::Float),  // 'f'
+            0x64 => Ok(VariableType::Double), // 'd'
+            0x80..=0xCF => Ok(VariableType::FixedString(code - 0x7F)),
+            _ => invalid(),
+        }
+    }
+}
+
+/// Adds a `usize` byte offset to a `u64` base position.
+///
+/// Returns an I/O error if the offset exceeds `u64`.
+pub(super) fn offset_position(base: u64, offset: usize) -> Result<u64> {
+    let offset = u64::try_from(offset).map_err(|_| {
+        DtaError::io(
+            Section::Schema,
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "section offset exceeds u64",
+            ),
+        )
+    })?;
+    Ok(base + offset)
+}
+
+/// Creates an I/O error for a variable count that exceeds the
+/// platform's addressable range.
+pub(super) fn unsupported_variable_count() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "variable count exceeds platform address space",
+    )
+}
+
+/// Reads a little-endian or big-endian `u64` at the given index within
+/// a buffer of packed `u64` values.
+pub(super) fn read_u64_at(buffer: &[u8], index: usize, byte_order: ByteOrder) -> u64 {
+    let offset = index * 8;
+    let bytes = [
+        buffer[offset],
+        buffer[offset + 1],
+        buffer[offset + 2],
+        buffer[offset + 3],
+        buffer[offset + 4],
+        buffer[offset + 5],
+        buffer[offset + 6],
+        buffer[offset + 7],
+    ];
+    byte_order.read_u64(bytes)
+}
+
+/// Zips the per-variable arrays read out of the schema section into a
+/// single vector of [`VariableBuilder`]s. All input vectors must have
+/// the same length (the caller reads each from the same
+/// `variable_count`) — mismatches panic on internal invariant.
+pub(super) fn assemble_variables(
+    types: Vec<VariableType>,
+    names: Vec<String>,
+    formats: Vec<String>,
+    value_label_names: Vec<String>,
+    labels: Vec<String>,
+) -> Vec<VariableBuilder> {
+    let count = types.len();
+    let mut types = types.into_iter();
+    let mut names = names.into_iter();
+    let mut formats = formats.into_iter();
+    let mut value_label_names = value_label_names.into_iter();
+    let mut labels = labels.into_iter();
+
+    let mut variables = Vec::with_capacity(count);
+    for _ in 0..count {
+        let variable_type = types.next().expect("types length mismatch");
+        let variable_name = names.next().expect("names length mismatch");
+        let format = formats.next().expect("formats length mismatch");
+        let label_name = value_label_names
+            .next()
+            .expect("value_label_names length mismatch");
+        let label_value = labels.next().expect("labels length mismatch");
+        let variable = Variable::builder(variable_type, variable_name)
+            .format(format)
+            .value_label_name(label_name)
+            .label(label_value);
+        variables.push(variable);
+    }
+    variables
+}

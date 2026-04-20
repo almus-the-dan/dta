@@ -2,6 +2,7 @@ use encoding_rs::Encoding;
 use tokio::io::AsyncRead;
 
 use super::async_reader_state::AsyncReaderState;
+use super::async_schema_reader::AsyncSchemaReader;
 use super::byte_order::ByteOrder;
 use super::dta_error::{Field, FormatErrorKind, Result, Section};
 use super::header::Header;
@@ -40,7 +41,7 @@ impl<R> AsyncHeaderReader<R> {
 }
 
 impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
-    /// Parses the file header and returns the parsed [`Header`].
+    /// Parses the file header and transitions to schema reading.
     ///
     /// Auto-detects the format by reading the first byte: `b'<'`
     /// selects the XML header parser (formats 117+), otherwise the
@@ -55,7 +56,7 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     /// read failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
     /// when the header bytes do not match any supported DTA format
     /// (104–119).
-    pub async fn read_header(mut self) -> Result<Header> {
+    pub async fn read_header(mut self) -> Result<AsyncSchemaReader<R>> {
         let first_byte = self.state.read_u8(Section::Header).await?;
 
         let (release, byte_order, variable_count, observation_count) = if first_byte == b'<' {
@@ -83,12 +84,14 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
                 .await?
         };
 
-        Ok(Header::builder(release, byte_order)
+        let header = Header::builder(release, byte_order)
             .variable_count(variable_count)
             .observation_count(observation_count)
             .dataset_label(dataset_label)
             .timestamp(timestamp)
-            .build())
+            .build();
+        let state = self.state.with_encoding(encoding);
+        Ok(AsyncSchemaReader::new(state, header))
     }
 }
 
@@ -308,28 +311,36 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use crate::stata::dta::dta_error::DtaError;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::schema::Schema;
 
-    /// Writes `header` through the async header writer, reads it
-    /// back through the async header reader, and returns the
-    /// round-tripped header. Because `AsyncHeaderWriter` is terminal
-    /// for the POC the written header carries zero K/N placeholders,
-    /// so tests that need to assert non-zero K/N use `serialize_xml`
-    /// below instead.
+    /// Writes `header` through the async header + schema writers
+    /// (empty schema, terminal for the POC) and reads the header
+    /// back. Because the async schema writer patches K=0 for the
+    /// empty schema, tests that need to assert non-zero K/N use
+    /// `serialize_xml` below instead.
     async fn round_trip(header: &Header) -> Header {
-        let bytes: Vec<u8> = DtaWriter::new()
-            .from_tokio_writer(Vec::<u8>::new())
+        let cursor: Cursor<Vec<u8>> = DtaWriter::new()
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(header.clone())
             .await
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .await
             .unwrap();
+        let bytes = cursor.into_inner();
         DtaReader::default()
             .from_tokio_reader(bytes.as_slice())
             .read_header()
             .await
             .unwrap()
+            .header()
+            .clone()
     }
 
     /// Serializes a [`Header`] into raw XML DTA bytes (formats
@@ -397,6 +408,8 @@ mod tests {
             .read_header()
             .await
             .unwrap()
+            .header()
+            .clone()
     }
 
     // -- Binary header parsing (formats 104–116) -----------------------------
@@ -495,18 +508,22 @@ mod tests {
         let expected = Header::builder(Release::V114, ByteOrder::LittleEndian)
             .dataset_label("test")
             .build();
-        let bytes: Vec<u8> = DtaWriter::new()
-            .from_tokio_writer(Vec::<u8>::new())
+        let cursor: Cursor<Vec<u8>> = DtaWriter::new()
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
             .write_header(expected)
             .await
+            .unwrap()
+            .write_schema(Schema::builder().build().unwrap())
+            .await
             .unwrap();
-        let parsed = DtaReader::new()
+        let bytes = cursor.into_inner();
+        let schema_reader = DtaReader::new()
             .encoding(encoding_rs::UTF_8)
             .from_tokio_reader(bytes.as_slice())
             .read_header()
             .await
             .unwrap();
-        assert_eq!(parsed.dataset_label(), "test");
+        assert_eq!(schema_reader.header().dataset_label(), "test");
     }
 
     // -- XML header parsing (formats 117–119) --------------------------------

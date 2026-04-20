@@ -6,6 +6,12 @@ pub mod async_header_reader;
 pub mod async_header_writer;
 #[cfg(feature = "tokio")]
 mod async_reader_state;
+/// Async reader for variable definitions (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_schema_reader;
+/// Async writer for variable definitions (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_schema_writer;
 #[cfg(feature = "tokio")]
 mod async_writer_state;
 /// Byte order (endianness) representation.
@@ -53,6 +59,8 @@ pub mod record_writer;
 pub mod release;
 /// Variable definitions and layout.
 pub mod schema;
+mod schema_format;
+mod schema_parse;
 /// Reads variable definitions from a DTA file.
 pub mod schema_reader;
 /// Writes variable definitions to a DTA file.

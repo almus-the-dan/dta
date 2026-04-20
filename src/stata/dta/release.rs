@@ -233,11 +233,12 @@ impl Release {
         }
     }
 
-    /// Width of each sort-list entry: 2 bytes (`u16`) for pre-119,
-    /// 4 bytes (`u32`) for 119+.
+    /// Whether each sort-list entry is stored as `u32` (format 119+).
+    /// Earlier formats use `u16`.
     #[must_use]
-    pub(crate) fn sort_entry_len(self) -> usize {
-        if self >= Self::V119 { 4 } else { 2 }
+    #[inline]
+    pub(crate) fn supports_extended_sort_entry(self) -> bool {
+        self >= Self::V119
     }
 
     /// Maximum byte length of a fixed-length string variable.
@@ -492,13 +493,17 @@ mod tests {
         assert_eq!(Release::V119.variable_label_len(), 321);
     }
 
-    // -- sort_entry_len ------------------------------------------------------
+    // -- supports_extended_sort_entry ----------------------------------------
 
     #[test]
-    fn sort_entry_len_boundaries() {
-        assert_eq!(Release::V104.sort_entry_len(), 2);
-        assert_eq!(Release::V118.sort_entry_len(), 2);
-        assert_eq!(Release::V119.sort_entry_len(), 4);
+    fn supports_extended_sort_entry_pre_119() {
+        assert!(!Release::V104.supports_extended_sort_entry());
+        assert!(!Release::V118.supports_extended_sort_entry());
+    }
+
+    #[test]
+    fn supports_extended_sort_entry_119() {
+        assert!(Release::V119.supports_extended_sort_entry());
     }
 
     // -- supports_extended_expansion -----------------------------------------

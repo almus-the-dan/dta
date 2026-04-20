@@ -7,8 +7,11 @@ use super::header::Header;
 use super::reader_state::ReaderState;
 use super::release::Release;
 use super::schema::Schema;
+use super::schema_parse::{
+    assemble_variables, offset_position, parse_type_code, read_u64_at, unsupported_variable_count,
+};
 use super::section_offsets::SectionOffsets;
-use super::variable::{Variable, VariableBuilder};
+use super::string_decoding::decode_fixed_string;
 use super::variable_type::VariableType;
 
 /// Reads variable definitions from a DTA file.
@@ -213,7 +216,8 @@ impl<R: Read> SchemaReader<R> {
     ) -> Result<Vec<u32>> {
         self.expect_tag(b"<sortlist>")?;
 
-        let entry_len = release.sort_entry_len();
+        let extended = release.supports_extended_sort_entry();
+        let entry_len = if extended { 4 } else { 2 };
         let entry_count = variable_count + 1;
         let buffer = self
             .state
@@ -222,10 +226,7 @@ impl<R: Read> SchemaReader<R> {
         let mut sort_order = Vec::new();
         for index in 0..entry_count {
             let offset = index * entry_len;
-            let index = if entry_len == 2 {
-                let bytes = [buffer[offset], buffer[offset + 1]];
-                u32::from(byte_order.read_u16(bytes))
-            } else {
+            let index = if extended {
                 let bytes = [
                     buffer[offset],
                     buffer[offset + 1],
@@ -233,6 +234,9 @@ impl<R: Read> SchemaReader<R> {
                     buffer[offset + 3],
                 ];
                 byte_order.read_u32(bytes)
+            } else {
+                let bytes = [buffer[offset], buffer[offset + 1]];
+                u32::from(byte_order.read_u16(bytes))
             };
 
             if index == 0 {
@@ -314,168 +318,18 @@ impl<R: Read> SchemaReader<R> {
             let start = index * entry_len;
             let position = offset_position(section_start, start)?;
             let raw = &buffer[start..start + entry_len];
-            let null_end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
-            let decoded = encoding
-                .decode_without_bom_handling_and_without_replacement(&raw[..null_end])
-                .ok_or_else(|| {
-                    DtaError::format(
-                        Section::Schema,
-                        position,
-                        FormatErrorKind::InvalidEncoding { field },
-                    )
-                })?;
-            result.push(decoded.into_owned());
+            result.push(decode_fixed_string(
+                raw,
+                encoding,
+                Section::Schema,
+                field,
+                position,
+            )?);
         }
 
         self.expect_tag(close_tag)?;
         Ok(result)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Type code parsing
-// ---------------------------------------------------------------------------
-
-/// Converts a raw type code to a [`VariableType`].
-///
-/// The interpretation depends on the format version:
-///
-/// | Formats   | Numeric codes          | String codes            |
-/// |-----------|------------------------|-------------------------|
-/// | 104–110   | ASCII `b/i/l/f/d`      | `≥ 0x7F` → len − 0x7F  |
-/// | 111–116   | `0xFB`–`0xFF`          | code = byte length      |
-/// | 117+      | `0xFFF6`–`0xFFFA`      | code = byte length      |
-/// |           | `0x8000` = strL        |                         |
-///
-/// String codes are validated against the maximum fixed-string length
-/// for the format version (80 for 104–110, 244 for 111–116, 2045 for
-/// 117+). Codes outside the valid range produce an
-/// [`InvalidVariableType`](FormatErrorKind::InvalidVariableType) error.
-fn parse_type_code(code: u16, release: Release, position: u64) -> Result<VariableType> {
-    let invalid = || {
-        Err(DtaError::format(
-            Section::Schema,
-            position,
-            FormatErrorKind::InvalidVariableType { code },
-        ))
-    };
-
-    if release >= Release::V117 {
-        // 2-byte codes (format 117+)
-        match code {
-            0xFFFA => Ok(VariableType::Byte),
-            0xFFF9 => Ok(VariableType::Int),
-            0xFFF8 => Ok(VariableType::Long),
-            0xFFF7 => Ok(VariableType::Float),
-            0xFFF6 => Ok(VariableType::Double),
-            0x8000 => Ok(VariableType::LongString),
-            1..=2045 => Ok(VariableType::FixedString(code)),
-            _ => invalid(),
-        }
-    } else if release >= Release::V111 {
-        // 1-byte codes, high byte (format 111–116)
-        match code {
-            0xFB => Ok(VariableType::Byte),
-            0xFC => Ok(VariableType::Int),
-            0xFD => Ok(VariableType::Long),
-            0xFE => Ok(VariableType::Float),
-            0xFF => Ok(VariableType::Double),
-            1..=244 => Ok(VariableType::FixedString(code)),
-            _ => invalid(),
-        }
-    } else {
-        // ASCII codes (format 104–110)
-        match code {
-            0x62 => Ok(VariableType::Byte),   // 'b'
-            0x69 => Ok(VariableType::Int),    // 'i'
-            0x6C => Ok(VariableType::Long),   // 'l'
-            0x66 => Ok(VariableType::Float),  // 'f'
-            0x64 => Ok(VariableType::Double), // 'd'
-            0x80..=0xCF => Ok(VariableType::FixedString(code - 0x7F)),
-            _ => invalid(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Adds a `usize` byte offset to a `u64` base position.
-///
-/// Returns an I/O error if the offset exceeds `u64`.
-fn offset_position(base: u64, offset: usize) -> Result<u64> {
-    let offset = u64::try_from(offset).map_err(|_| {
-        DtaError::io(
-            Section::Schema,
-            std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "section offset exceeds u64",
-            ),
-        )
-    })?;
-    Ok(base + offset)
-}
-
-/// Creates an I/O error for a variable count that exceeds the
-/// platform's addressable range.
-fn unsupported_variable_count() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "variable count exceeds platform address space",
-    )
-}
-
-/// Reads a little-endian or big-endian `u64` at the given index within
-/// a buffer of packed `u64` values.
-fn read_u64_at(buffer: &[u8], index: usize, byte_order: ByteOrder) -> u64 {
-    let offset = index * 8;
-    let bytes = [
-        buffer[offset],
-        buffer[offset + 1],
-        buffer[offset + 2],
-        buffer[offset + 3],
-        buffer[offset + 4],
-        buffer[offset + 5],
-        buffer[offset + 6],
-        buffer[offset + 7],
-    ];
-    byte_order.read_u64(bytes)
-}
-
-/// Zips the per-variable arrays into a single [`Variable`] vec.
-fn assemble_variables(
-    types: Vec<VariableType>,
-    names: Vec<String>,
-    formats: Vec<String>,
-    value_label_names: Vec<String>,
-    labels: Vec<String>,
-) -> Vec<VariableBuilder> {
-    let count = types.len();
-    let mut types = types.into_iter();
-    let mut names = names.into_iter();
-    let mut formats = formats.into_iter();
-    let mut value_label_names = value_label_names.into_iter();
-    let mut labels = labels.into_iter();
-
-    // All vectors are built from the same `variable_count` in
-    // `read_schema`, so the expect calls below should never fire.
-    let mut variables = Vec::with_capacity(count);
-    for _ in 0..count {
-        let variable_type = types.next().expect("types length mismatch");
-        let variable_name = names.next().expect("names length mismatch");
-        let format = formats.next().expect("formats length mismatch");
-        let label_name = value_label_names
-            .next()
-            .expect("value_label_names length mismatch");
-        let label_value = labels.next().expect("labels length mismatch");
-        let variable = Variable::builder(variable_type, variable_name)
-            .format(format)
-            .value_label_name(label_name)
-            .label(label_value);
-        variables.push(variable);
-    }
-    variables
 }
 
 // ===========================================================================
@@ -492,6 +346,7 @@ mod tests {
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;
+    use crate::stata::dta::variable::Variable;
 
     // -- parse_type_code unit tests ------------------------------------------
 
@@ -697,7 +552,7 @@ mod tests {
     /// Used by every round-trip test in this module. The two
     /// expansion-field tests splice raw bytes in before the
     /// terminator and rely on the writer's output ending with the
-    /// same `u8 data_type + u16/u32 length` terminator the hand-
+    /// same `u8 data_type + u16/u32 length` terminator that the hand-
     /// crafted helper used to emit.
     fn serialize_file(
         release: Release,
