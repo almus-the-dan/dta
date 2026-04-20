@@ -8,7 +8,7 @@ use super::header::Header;
 use super::release::Release;
 use super::schema::Schema;
 use super::schema_parse::{
-    assemble_variables, offset_position, parse_type_code, read_u64_at, unsupported_variable_count,
+    assemble_variables, buffer_size, offset_position, parse_type_code, read_u64_at,
 };
 use super::section_offsets::SectionOffsets;
 use super::string_decoding::decode_fixed_string;
@@ -59,8 +59,19 @@ impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
     pub async fn read_schema(mut self) -> Result<AsyncCharacteristicReader<R>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
-        let variable_count = usize::try_from(self.header.variable_count())
-            .map_err(|_| DtaError::io(Section::Schema, unsupported_variable_count()))?;
+        let header_position = self.state.position();
+        let declared = self.header.variable_count();
+        let variable_count = usize::try_from(declared).map_err(|_| {
+            DtaError::format(
+                Section::Schema,
+                header_position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::VariableCount,
+                    max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+                    actual: u64::from(declared),
+                },
+            )
+        })?;
 
         if release.is_xml_like() {
             let offsets = self.read_map(byte_order).await?;
@@ -161,10 +172,8 @@ impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
 
         let entry_len = release.type_list_entry_len();
         let section_start = self.state.position();
-        let buffer = self
-            .state
-            .read_exact(variable_count * entry_len, Section::Schema)
-            .await?;
+        let total_bytes = buffer_size(variable_count, entry_len, section_start)?;
+        let buffer = self.state.read_exact(total_bytes, Section::Schema).await?;
 
         let mut types = Vec::with_capacity(variable_count);
         for index in 0..variable_count {
@@ -208,11 +217,22 @@ impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
 
         let extended = release.supports_extended_sort_entry();
         let entry_len = if extended { 4 } else { 2 };
-        let entry_count = variable_count + 1;
-        let buffer = self
-            .state
-            .read_exact(entry_count * entry_len, Section::Schema)
-            .await?;
+        let position = self.state.position();
+        let entry_count = variable_count.checked_add(1).ok_or_else(|| {
+            DtaError::format(
+                Section::Schema,
+                position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::VariableCount,
+                    max: u64::from(u32::MAX),
+                    actual: u64::try_from(variable_count)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                },
+            )
+        })?;
+        let total_bytes = buffer_size(entry_count, entry_len, position)?;
+        let buffer = self.state.read_exact(total_bytes, Section::Schema).await?;
 
         let mut sort_order = Vec::new();
         for index in 0..entry_count {
@@ -303,10 +323,8 @@ impl<R: AsyncRead + Unpin> AsyncSchemaReader<R> {
 
         let encoding = self.state.encoding();
         let section_start = self.state.position();
-        let buffer = self
-            .state
-            .read_exact(count * entry_len, Section::Schema)
-            .await?;
+        let total_bytes = buffer_size(count, entry_len, section_start)?;
+        let buffer = self.state.read_exact(total_bytes, Section::Schema).await?;
 
         let mut result = Vec::with_capacity(count);
         for index in 0..count {

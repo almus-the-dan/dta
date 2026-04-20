@@ -157,9 +157,14 @@ impl<R: BufRead> ValueLabelReader<R> {
             }
             let label = decode_label(label_bytes, 8, encoding)?;
             let value = i32::try_from(entry_index).map_err(|_| {
-                DtaError::io(
+                DtaError::format(
                     Section::ValueLabels,
-                    std::io::Error::other("value label index exceeds i32"),
+                    0,
+                    FormatErrorKind::FieldTooLarge {
+                        field: Field::ValueLabelEntry,
+                        max: u64::try_from(i32::MAX).unwrap_or(u64::MAX),
+                        actual: u64::try_from(entry_index).unwrap_or(u64::MAX),
+                    },
                 )
             })?;
             entries.push(ValueLabelEntry::new(value, label));

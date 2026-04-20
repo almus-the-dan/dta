@@ -1,9 +1,9 @@
 //! Pure parse helpers shared by the sync and async characteristic
 //! readers. I/O stays in the caller; this module covers the
 //! representation-level bits (XML tag dispatch, length arithmetic,
-//! error shaping) both reader flavours reuse.
+//! error shaping) both reader flavors reuse.
 
-use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 
 /// Disambiguated XML tag at the entry-start position within the
 /// characteristics section.
@@ -65,7 +65,19 @@ pub(super) fn characteristic_value_len(
     entry_position: u64,
 ) -> Result<usize> {
     let total_length_usize = expansion_length_to_usize(total_length)?;
-    let two_names_len = 2 * variable_name_len;
+    let two_names_len = variable_name_len.checked_mul(2).ok_or_else(|| {
+        DtaError::format(
+            Section::Characteristics,
+            entry_position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::CharacteristicName,
+                max: u64::from(u32::MAX),
+                actual: u64::try_from(variable_name_len)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(2),
+            },
+        )
+    })?;
     total_length_usize
         .checked_sub(two_names_len)
         .ok_or_else(|| {

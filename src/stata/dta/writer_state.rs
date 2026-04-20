@@ -291,9 +291,14 @@ impl<W: Write + Seek> WriterState<W> {
             .checked_mul(8)
             .and_then(|bytes| u64::try_from(bytes).ok())
             .ok_or_else(|| {
-                DtaError::io(
+                DtaError::format(
                     section,
-                    std::io::Error::other("map slot byte offset exceeds u64"),
+                    self.position,
+                    FormatErrorKind::FieldTooLarge {
+                        field: Field::VariableCount,
+                        max: u64::MAX,
+                        actual: u64::try_from(index).unwrap_or(u64::MAX).saturating_mul(8),
+                    },
                 )
             })?;
         self.patch_u64_at(base + slot_offset, value, byte_order, section)

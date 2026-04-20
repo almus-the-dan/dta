@@ -1,7 +1,7 @@
 //! Pure parse helpers shared by the sync and async long-string
 //! readers. I/O stays in the caller.
 
-use super::dta_error::{DtaError, Result, Section};
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::long_string::GsoType;
 
 /// Parsed GSO entry header (the fields after the `"GSO"` magic).
@@ -52,13 +52,20 @@ pub(super) fn classify_gso_tag(head: &[u8]) -> Option<GsoTag> {
     }
 }
 
-/// Converts a long-string data length from `u32` to `usize`, producing
-/// a clean I/O error on overflow.
+/// Converts a long-string data length from `u32` to `usize`,
+/// producing a [`FormatErrorKind::FieldTooLarge`] tagged with
+/// `Field::LongStringData` on overflow (possible on 16-bit platforms
+/// where `usize::MAX < u32::MAX`).
 pub(super) fn long_string_data_len_to_usize(length: u32) -> Result<usize> {
     usize::try_from(length).map_err(|_| {
-        DtaError::io(
+        DtaError::format(
             Section::LongStrings,
-            std::io::Error::other("long string data length exceeds usize"),
+            0,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::LongStringData,
+                max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+                actual: u64::from(length),
+            },
         )
     })
 }

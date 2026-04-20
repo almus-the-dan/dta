@@ -2,7 +2,7 @@
 //! readers. I/O stays in the caller.
 
 use super::byte_order::ByteOrder;
-use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::value_label::{ValueLabelEntry, ValueLabelTable};
 
 /// Disambiguated 5-byte tag at the entry-start position within the
@@ -51,11 +51,19 @@ pub(super) fn decode_label(
         })
 }
 
-/// Returns the shared "value-label table size overflow" I/O error.
+/// Returns the shared "value-label table size overflow" format error.
+/// Fires when a declared table field (entry count, text length, or a
+/// byte offset derived from them) overflows the platform's address
+/// space during parsing.
 pub(super) fn overflow_error() -> DtaError {
-    DtaError::io(
+    DtaError::format(
         Section::ValueLabels,
-        std::io::Error::other("value label table size overflow"),
+        0,
+        FormatErrorKind::FieldTooLarge {
+            field: Field::ValueLabelEntry,
+            max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+            actual: u64::MAX,
+        },
     )
 }
 

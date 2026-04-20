@@ -9,6 +9,7 @@ use super::characteristic_parse::{
 };
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
+use super::record_parse::data_section_overflow_error;
 use super::schema::Schema;
 
 /// Reads characteristics from a DTA file asynchronously.
@@ -109,7 +110,11 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures or if the state's
-    /// section offsets have not been initialized.
+    /// section offsets have not been initialized, and
+    /// [`DtaError::Format`] with
+    /// [`FieldTooLarge`](FormatErrorKind::FieldTooLarge) tagged
+    /// `Field::ObservationCount` if the computed data-section size
+    /// or value-labels offset (binary formats only) overflows `u64`.
     pub async fn into_record_reader(mut self) -> Result<AsyncRecordReader<R>> {
         self.skip_to_end().await?;
         if !self.header.release().is_xml_like() {
@@ -296,31 +301,16 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
     /// all expansion fields have been consumed.
     fn compute_binary_section_offsets(&mut self) -> Result<()> {
         let records_offset = self.state.position();
-        let row_len = u64::try_from(self.schema.row_len()).map_err(|_| {
-            DtaError::io(
-                Section::Records,
-                std::io::Error::other("row length exceeds u64"),
-            )
-        })?;
+        let row_len = u64::try_from(self.schema.row_len())
+            .map_err(|_| data_section_overflow_error(records_offset))?;
         let data_section_size = self
             .header
             .observation_count()
             .checked_mul(row_len)
-            .ok_or_else(|| {
-                DtaError::io(
-                    Section::Records,
-                    std::io::Error::other("data section size overflow"),
-                )
-            })?;
-        let value_labels_offset =
-            records_offset
-                .checked_add(data_section_size)
-                .ok_or_else(|| {
-                    DtaError::io(
-                        Section::ValueLabels,
-                        std::io::Error::other("value labels offset overflow"),
-                    )
-                })?;
+            .ok_or_else(|| data_section_overflow_error(records_offset))?;
+        let value_labels_offset = records_offset
+            .checked_add(data_section_size)
+            .ok_or_else(|| data_section_overflow_error(records_offset))?;
 
         let offsets = self
             .state

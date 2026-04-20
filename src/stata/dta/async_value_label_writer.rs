@@ -137,17 +137,26 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
 
         let slots = build_old_slot_table(table, self.state.encoding(), position_before)?;
         let slot_count = slots.len();
-        let table_len_u16 = u16::try_from(slot_count.saturating_mul(8)).map_err(|_| {
-            DtaError::format(
-                Section::ValueLabels,
-                position_before,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::ValueLabelEntry,
-                    max: u64::from(u16::MAX),
-                    actual: u64::try_from(slot_count * 8).unwrap_or(u64::MAX),
-                },
-            )
-        })?;
+        let table_len_u16 = slot_count
+            .checked_mul(8)
+            .and_then(|n| u16::try_from(n).ok())
+            .ok_or_else(|| {
+                // `actual` is only for error display — saturate at u64::MAX
+                // so we report a useful number even if `slot_count * 8`
+                // overflows `usize` on a 16-bit target.
+                let actual = u64::try_from(slot_count)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(8);
+                DtaError::format(
+                    Section::ValueLabels,
+                    position_before,
+                    FormatErrorKind::FieldTooLarge {
+                        field: Field::ValueLabelEntry,
+                        max: u64::from(u16::MAX),
+                        actual,
+                    },
+                )
+            })?;
 
         self.state
             .write_u16(table_len_u16, byte_order, Section::ValueLabels)
@@ -200,7 +209,21 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
         })?;
 
         // Payload bytes = 8 (n + text_len) + 4*n (offsets) + 4*n (values) + text_len.
-        let payload_bytes = 8u64 + u64::from(entry_count).saturating_mul(8) + u64::from(text_len);
+        let payload_bytes = u64::from(entry_count)
+            .checked_mul(8)
+            .and_then(|n| n.checked_add(8))
+            .and_then(|n| n.checked_add(u64::from(text_len)))
+            .ok_or_else(|| {
+                DtaError::format(
+                    Section::ValueLabels,
+                    position_before,
+                    FormatErrorKind::FieldTooLarge {
+                        field: Field::ValueLabelEntry,
+                        max: u64::from(u32::MAX),
+                        actual: u64::MAX,
+                    },
+                )
+            })?;
         let table_len = u32::try_from(payload_bytes).map_err(|_| {
             DtaError::format(
                 Section::ValueLabels,

@@ -3,10 +3,10 @@
 //! Each function takes already-read bytes (plus the byte offset at
 //! which they were read, for error reporting) and returns the parsed
 //! value or a [`DtaError`]. The I/O itself stays in the caller so
-//! both reader flavours can reuse the same parsing logic.
+//! both reader flavors can reuse the same parsing logic.
 
 use super::byte_order::ByteOrder;
-use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::release::Release;
 use super::variable::{Variable, VariableBuilder};
 use super::variable_type::VariableType;
@@ -71,26 +71,43 @@ pub(super) fn parse_type_code(code: u16, release: Release, position: u64) -> Res
 
 /// Adds a `usize` byte offset to a `u64` base position.
 ///
-/// Returns an I/O error if the offset exceeds `u64`.
+/// Returns a [`FormatErrorKind::FieldTooLarge`] tagged with
+/// `Field::VariableCount` if the offset doesn't fit in `u64` or if
+/// the sum overflows `u64` — both are realistically unreachable, but
+/// this keeps the math defensively checked instead of silently
+/// wrapping in release builds.
 pub(super) fn offset_position(base: u64, offset: usize) -> Result<u64> {
-    let offset = u64::try_from(offset).map_err(|_| {
-        DtaError::io(
-            Section::Schema,
-            std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "section offset exceeds u64",
-            ),
-        )
-    })?;
-    Ok(base + offset)
+    let offset_u64 = u64::try_from(offset).map_err(|_| section_size_overflow_error(base))?;
+    base.checked_add(offset_u64)
+        .ok_or_else(|| section_size_overflow_error(base))
 }
 
-/// Creates an I/O error for a variable count that exceeds the
-/// platform's addressable range.
-pub(super) fn unsupported_variable_count() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "variable count exceeds platform address space",
+/// Computes `count * entry_len` for sizing a schema section's read
+/// buffer. Returns a [`FormatErrorKind::FieldTooLarge`] tagged with
+/// `Field::VariableCount` if the multiplication overflows `usize` —
+/// which happens when the schema's `variable_count` paired with the
+/// release's per-variable field width exceeds the target's address
+/// space (a real concern on 16-bit platforms).
+pub(super) fn buffer_size(count: usize, entry_len: usize, position: u64) -> Result<usize> {
+    count
+        .checked_mul(entry_len)
+        .ok_or_else(|| section_size_overflow_error(position))
+}
+
+/// Shared constructor for the "schema section size overflowed the
+/// platform's addressable range" format error. The only meaningful
+/// upper bound we can communicate is the format's `K` field width
+/// (u32) — the actual overflow may be driven by any of the
+/// per-variable byte multiplications.
+fn section_size_overflow_error(position: u64) -> DtaError {
+    DtaError::format(
+        Section::Schema,
+        position,
+        FormatErrorKind::FieldTooLarge {
+            field: Field::VariableCount,
+            max: u64::from(u32::MAX),
+            actual: u64::MAX,
+        },
     )
 }
 

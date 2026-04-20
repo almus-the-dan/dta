@@ -5,7 +5,7 @@
 use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
-use super::dta_error::Result;
+use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::release::Release;
 use super::schema::Schema;
 use super::value::Value;
@@ -38,4 +38,21 @@ pub(super) fn parse_row<'a>(
         values.push(value);
     }
     Ok(values)
+}
+
+/// Returns the shared "data section byte offset/size overflows `u64`"
+/// format error. The binary characteristic-to-record transition
+/// computes `records_offset + observation_count * row_len` to locate
+/// the start of the value-labels section; any of those arithmetic
+/// steps failing represents the same underlying concern.
+pub(super) fn data_section_overflow_error(position: u64) -> DtaError {
+    DtaError::format(
+        Section::Records,
+        position,
+        FormatErrorKind::FieldTooLarge {
+            field: Field::ObservationCount,
+            max: u64::MAX,
+            actual: u64::MAX,
+        },
+    )
 }
