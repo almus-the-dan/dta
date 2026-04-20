@@ -12,6 +12,12 @@ pub mod async_header_reader;
 pub mod async_header_writer;
 #[cfg(feature = "tokio")]
 mod async_reader_state;
+/// Async reader for observation records (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_record_reader;
+/// Async writer for observation records (tokio feature).
+#[cfg(feature = "tokio")]
+pub mod async_record_writer;
 /// Async reader for variable definitions (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_schema_reader;
@@ -59,6 +65,8 @@ pub mod long_string_writer;
 mod reader_state;
 /// An eagerly parsed observation row.
 pub mod record;
+mod record_format;
+mod record_parse;
 /// Reads observation records from the data section.
 pub mod record_reader;
 /// Writes observation records to the data section.

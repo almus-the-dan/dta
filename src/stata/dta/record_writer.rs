@@ -1,10 +1,14 @@
 use std::io::{Seek, Write};
 
 use super::byte_order::ByteOrder;
-use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::dta_error::{Field, Result, Section};
 use super::header::Header;
 use super::long_string_ref::LongStringRef;
 use super::long_string_writer::LongStringWriter;
+use super::record_format::{
+    encode_record_string, encode_u48, narrow_variable_index, observation_count_overflow_error,
+    validate_record_arity, validate_record_value_types,
+};
 use super::release::Release;
 use super::schema::Schema;
 use super::value::Value;
@@ -83,8 +87,9 @@ impl<W: Write + Seek> RecordWriter<W> {
         // Validate upfront so we never write partial row bytes that
         // would corrupt the output if the row turns out invalid
         // further down the line.
-        self.validate_arity(values)?;
-        self.validate_value_types(values)?;
+        let position = self.state.position();
+        validate_record_arity(values.len(), self.schema.variables().len(), position)?;
+        validate_record_value_types(values, self.schema.variables(), position)?;
 
         self.open_section_if_needed()?;
 
@@ -95,21 +100,14 @@ impl<W: Write + Seek> RecordWriter<W> {
             let variables = self.schema.variables();
             let variable = &variables[index];
             let variable_type = variable.variable_type();
-            let variable_index = u32::try_from(index).map_err(|_| {
-                DtaError::io(
-                    Section::Records,
-                    std::io::Error::other("variable index exceeds u32"),
-                )
-            })?;
+            let variable_index = narrow_variable_index(index, self.state.position())?;
             self.write_value(variable_index, variable_type, value)?;
         }
 
-        self.observation_count = self.observation_count.checked_add(1).ok_or_else(|| {
-            DtaError::io(
-                Section::Records,
-                std::io::Error::other("observation count exceeds u64"),
-            )
-        })?;
+        self.observation_count = self
+            .observation_count
+            .checked_add(1)
+            .ok_or_else(|| observation_count_overflow_error(self.state.position()))?;
         Ok(())
     }
 
@@ -159,56 +157,6 @@ impl<W: Write + Seek> RecordWriter<W> {
         if !self.opened {
             self.state.write_exact(b"<data>", Section::Records)?;
             self.opened = true;
-        }
-        Ok(())
-    }
-
-    fn validate_arity(&self, values: &[Value<'_>]) -> Result<()> {
-        let expected = self.schema.variables().len();
-        if values.len() != expected {
-            return Err(DtaError::format(
-                Section::Records,
-                self.state.position(),
-                FormatErrorKind::RecordArityMismatch {
-                    expected: u64::try_from(expected).unwrap_or(u64::MAX),
-                    actual: u64::try_from(values.len()).unwrap_or(u64::MAX),
-                },
-            ));
-        }
-        Ok(())
-    }
-
-    /// Checks that every value's variant matches the corresponding
-    /// variable's [`VariableType`] — so the row either writes
-    /// completely or not at all, never halfway. Assumes arity has
-    /// already been validated.
-    ///
-    /// Does *not* validate string encoding or string length against
-    /// the fixed-width slot; those remain inline errors at write
-    /// time. The dominant corruption risk — a wrong-variant value
-    /// landing mid-row — is what this pass catches.
-    fn validate_value_types(&self, values: &[Value<'_>]) -> Result<()> {
-        let position = self.state.position();
-        for (index, value) in values.iter().enumerate() {
-            let variables = self.schema.variables();
-            let variable = &variables[index];
-            let expected = variable.variable_type();
-            if !value_matches(expected, value) {
-                let variable_index = u32::try_from(index).map_err(|_| {
-                    DtaError::io(
-                        Section::Records,
-                        std::io::Error::other("variable index exceeds u32"),
-                    )
-                })?;
-                return Err(DtaError::format(
-                    Section::Records,
-                    position,
-                    FormatErrorKind::RecordValueTypeMismatch {
-                        variable_index,
-                        expected,
-                    },
-                ));
-            }
         }
         Ok(())
     }
@@ -297,35 +245,17 @@ impl<W: Write> RecordWriter<W> {
     }
 
     /// Emits a `FixedString` value: encoded bytes, then zero padding
-    /// to the declared slot width. Errors if the encoded length
-    /// exceeds the width, or if the string contains characters the
-    /// active encoding cannot represent.
+    /// to the declared slot width.
     fn write_record_string(&mut self, variable_index: u32, text: &str, width: u16) -> Result<()> {
-        let position = self.state.position();
-        let (encoded, _, had_unmappable) = self.state.encoding().encode(text);
-        if had_unmappable {
-            return Err(DtaError::format(
-                Section::Records,
-                position,
-                FormatErrorKind::InvalidEncoding {
-                    field: Field::VariableValue,
-                },
-            ));
-        }
-        let width_usize = usize::from(width);
-        if encoded.len() > width_usize {
-            return Err(DtaError::format(
-                Section::Records,
-                position,
-                FormatErrorKind::RecordStringTooLong {
-                    variable_index,
-                    max: width,
-                    actual: u32::try_from(encoded.len()).unwrap_or(u32::MAX),
-                },
-            ));
-        }
+        let encoded = encode_record_string(
+            text,
+            self.state.encoding(),
+            variable_index,
+            width,
+            self.state.position(),
+        )?;
         self.state
-            .write_padded_bytes(&encoded, width_usize, Section::Records)
+            .write_padded_bytes(&encoded, usize::from(width), Section::Records)
     }
 
     /// Emits an 8-byte strL reference. Layout depends on release:
@@ -367,45 +297,9 @@ impl<W: Write> RecordWriter<W> {
     /// Writes `value` as a 48-bit unsigned integer in the given byte
     /// order. Errors if `value >= 2^48`.
     fn write_u48(&mut self, value: u64, byte_order: ByteOrder) -> Result<()> {
-        const MAX_U48: u64 = (1u64 << 48) - 1;
-        if value > MAX_U48 {
-            return Err(DtaError::format(
-                Section::Records,
-                self.state.position(),
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::ObservationCount,
-                    max: MAX_U48,
-                    actual: value,
-                },
-            ));
-        }
-        // Widen to u64 bytes, then emit the 6 data-carrying bytes.
-        // For BE, the 6 data bytes are bytes8[2..8] (MSByte at [2]).
-        // For LE, they are bytes8[0..6] (LSByte at [0]).
-        let bytes8 = byte_order.write_u64(value);
-        let slice = match byte_order {
-            ByteOrder::BigEndian => &bytes8[2..8],
-            ByteOrder::LittleEndian => &bytes8[0..6],
-        };
-        self.state.write_exact(slice, Section::Records)
+        let bytes = encode_u48(value, byte_order, self.state.position())?;
+        self.state.write_exact(&bytes, Section::Records)
     }
-}
-
-/// Returns `true` when `value`'s variant matches the on-disk
-/// [`VariableType`]. `FixedString` widths are not checked here —
-/// those errors surface at write time via
-/// [`RecordWriter::write_record_string`].
-fn value_matches(variable_type: VariableType, value: &Value<'_>) -> bool {
-    matches!(
-        (variable_type, value),
-        (VariableType::Byte, Value::Byte(_))
-            | (VariableType::Int, Value::Int(_))
-            | (VariableType::Long, Value::Long(_))
-            | (VariableType::Float, Value::Float(_))
-            | (VariableType::Double, Value::Double(_))
-            | (VariableType::FixedString(_), Value::String(_))
-            | (VariableType::LongString, Value::LongStringRef(_))
-    )
 }
 
 // ===========================================================================
@@ -420,6 +314,7 @@ mod tests {
 
     use super::*;
     use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::dta_error::{DtaError, FormatErrorKind};
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::long_string_table::LongStringTable;

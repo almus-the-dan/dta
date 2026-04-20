@@ -1,6 +1,7 @@
 use tokio::io::AsyncRead;
 
 use super::async_reader_state::AsyncReaderState;
+use super::async_record_reader::AsyncRecordReader;
 use super::characteristic::{Characteristic, CharacteristicTarget, ExpansionFieldType};
 use super::characteristic_parse::{
     XML_SECTION_CLOSE_REST, XML_SECTION_OPEN_REST, XmlCharacteristicTag, characteristic_value_len,
@@ -97,28 +98,24 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
         }
     }
 
-    /// Consumes any remaining characteristic entries and returns the
-    /// underlying reader, closing out this phase.
+    /// Consumes any remaining characteristic entries and transitions
+    /// to record reading.
     ///
     /// For binary formats, this also computes and stores the
     /// data-section and value-label offsets in the state's section
     /// offsets — those positions are not known until expansion fields
     /// have been fully consumed.
     ///
-    /// POC-shaped terminal: once the async record reader exists this
-    /// will return `AsyncRecordReader<R>` and advance the typestate
-    /// chain.
-    ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures or if the state's
     /// section offsets have not been initialized.
-    pub async fn finish(mut self) -> Result<()> {
+    pub async fn into_record_reader(mut self) -> Result<AsyncRecordReader<R>> {
         self.skip_to_end().await?;
         if !self.header.release().is_xml_like() {
             self.compute_binary_section_offsets()?;
         }
-        Ok(())
+        Ok(AsyncRecordReader::new(self.state, self.header, self.schema))
     }
 }
 

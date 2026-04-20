@@ -345,6 +345,9 @@ mod tests {
             .write_schema(schema)
             .await
             .unwrap()
+            .into_record_writer()
+            .await
+            .unwrap()
             .finish()
             .await
             .unwrap();

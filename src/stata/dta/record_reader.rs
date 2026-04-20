@@ -7,8 +7,8 @@ use super::lazy_record::LazyRecord;
 use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
 use super::record::Record;
+use super::record_parse::parse_row;
 use super::schema::Schema;
-use super::value::Value;
 use super::value_label_reader::ValueLabelReader;
 
 /// Reads observation records from the data section of a DTA file.
@@ -81,23 +81,7 @@ impl<R: BufRead> RecordReader<R> {
         let release = self.header.release();
         let encoding = self.state.encoding();
         let row_bytes = self.state.buffer();
-        let variables = self.schema.variables();
-
-        let mut values = Vec::with_capacity(variables.len());
-        for variable in variables {
-            let offset = variable.offset();
-            let width = variable.variable_type().width();
-            let column_bytes = &row_bytes[offset..offset + width];
-            let value = Value::from_column_bytes(
-                column_bytes,
-                variable.variable_type(),
-                byte_order,
-                release,
-                encoding,
-            )?;
-            values.push(value);
-        }
-
+        let values = parse_row(row_bytes, &self.schema, byte_order, release, encoding)?;
         Ok(Some(Record::new(values)))
     }
 

@@ -1,5 +1,6 @@
 use tokio::io::{AsyncSeek, AsyncWrite};
 
+use super::async_record_writer::AsyncRecordWriter;
 use super::async_writer_state::AsyncWriterState;
 use super::byte_order::ByteOrder;
 use super::characteristic::{Characteristic, ExpansionFieldType};
@@ -102,7 +103,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     }
 
     /// Closes the characteristics section, patches the data offset
-    /// in the map (XML only), and returns the underlying writer.
+    /// in the map (XML only), and transitions to record writing.
     ///
     /// For XML the closing `</characteristics>` tag is emitted even
     /// if no entries were written (the opening tag is lazy-emitted
@@ -110,14 +111,10 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     /// zero-length terminator entry is written. V104 has no
     /// expansion-field section at all, so nothing is written.
     ///
-    /// POC-shaped terminal: once the async record writer exists this
-    /// will return `AsyncRecordWriter<W>` and advance the typestate
-    /// chain.
-    ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
-    pub async fn finish(mut self) -> Result<W> {
+    pub async fn into_record_writer(mut self) -> Result<AsyncRecordWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
 
@@ -133,7 +130,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
                 .await?;
         }
 
-        Ok(self.state.into_inner())
+        Ok(AsyncRecordWriter::new(self.state, self.header, self.schema))
     }
 
     async fn write_terminator(
@@ -328,7 +325,13 @@ mod tests {
         for entry in characteristics {
             writer.write_characteristic(entry).await.unwrap();
         }
-        let cursor: Cursor<Vec<u8>> = writer.finish().await.unwrap();
+        let cursor: Cursor<Vec<u8>> = writer
+            .into_record_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
         let bytes = cursor.into_inner();
 
         let mut reader = DtaReader::new()
@@ -531,7 +534,13 @@ mod tests {
             .await
             .unwrap();
         // Should not panic or error.
-        let _cursor: Cursor<Vec<u8>> = writer.finish().await.unwrap();
+        let _cursor: Cursor<Vec<u8>> = writer
+            .into_record_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
