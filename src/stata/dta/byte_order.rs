@@ -79,6 +79,24 @@ impl ByteOrder {
         }
     }
 
+    /// Decodes an `i32` from a 4-byte array.
+    #[must_use]
+    pub(crate) fn read_i32(self, bytes: [u8; 4]) -> i32 {
+        match self {
+            Self::BigEndian => i32::from_be_bytes(bytes),
+            Self::LittleEndian => i32::from_le_bytes(bytes),
+        }
+    }
+
+    /// Encodes an `i32` into a 4-byte array.
+    #[must_use]
+    pub(crate) fn write_i32(self, value: i32) -> [u8; 4] {
+        match self {
+            Self::BigEndian => value.to_be_bytes(),
+            Self::LittleEndian => value.to_le_bytes(),
+        }
+    }
+
     /// Decodes an `f32` from a 4-byte array.
     #[must_use]
     pub(crate) fn read_f32(self, bytes: [u8; 4]) -> f32 {

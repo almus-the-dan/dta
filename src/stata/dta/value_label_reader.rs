@@ -401,13 +401,12 @@ fn parse_modern_payload(
         }
 
         let value_position = values_start + 4 * entry_index;
-        let raw_value = byte_order.read_u32([
+        let value = byte_order.read_i32([
             payload[value_position],
             payload[value_position + 1],
             payload[value_position + 2],
             payload[value_position + 3],
         ]);
-        let value = i32::from_ne_bytes(raw_value.to_ne_bytes());
 
         let label_bytes = &payload[text_start + text_offset_usize..];
         let label = decode_label(label_bytes, text_len_usize - text_offset_usize, encoding)?;

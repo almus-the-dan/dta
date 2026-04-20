@@ -185,6 +185,10 @@ impl<W: Write> WriterState<W> {
         self.write_exact(&byte_order.write_u64(value), section)
     }
 
+    pub fn write_i32(&mut self, value: i32, byte_order: ByteOrder, section: Section) -> Result<()> {
+        self.write_exact(&byte_order.write_i32(value), section)
+    }
+
     /// Writes `bytes` padded with trailing zeros out to `width`
     /// bytes total, reusing the internal scratch buffer — no
     /// allocation per call once the buffer's capacity settles at

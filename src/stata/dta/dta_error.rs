@@ -273,6 +273,13 @@ pub enum FormatErrorKind {
         /// The release that cannot store long strings.
         release: Release,
     },
+    /// A value-label value cannot be represented in the V104
+    /// legacy layout, which uses the entry's array index as the
+    /// value (non-negative, ≤ 8190).
+    OldValueLabelValueOutOfRange {
+        /// The caller-supplied value that doesn't fit.
+        value: i32,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -322,6 +329,11 @@ impl fmt::Display for FormatErrorKind {
             Self::LongStringsUnsupported { release } => {
                 write!(f, "format {release} does not support long strings",)
             }
+            Self::OldValueLabelValueOutOfRange { value } => write!(
+                f,
+                "value-label value {value} is out of range for the V104 legacy layout \
+                 (must be 0..=8190)",
+            ),
             Self::RecordArityMismatch { expected, actual } => write!(
                 f,
                 "record has {actual} values but the schema declares {expected} variables",
