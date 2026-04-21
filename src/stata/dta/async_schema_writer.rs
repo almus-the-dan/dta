@@ -131,11 +131,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncSchemaWriter<W> {
 
         self.finalize_schema_section(&descriptor_offsets).await?;
 
-        Ok(AsyncCharacteristicWriter::new(
-            self.state,
-            self.header,
-            schema,
-        ))
+        let writer = AsyncCharacteristicWriter::new(self.state, self.header, schema);
+        Ok(writer)
     }
 
     /// Seek-patches the header's K (variable count) field with
@@ -202,19 +199,19 @@ impl<W: AsyncWrite + Unpin> AsyncSchemaWriter<W> {
                 .write_exact(b"<variable_types>", Section::Schema)
                 .await?;
         }
-        let entry_len = release.type_list_entry_len();
+        let extended = release.supports_extended_type_list_entry();
         for variable in schema.variables() {
             let code = variable
                 .variable_type()
                 .try_to_u16(release)
                 .expect("variable type validated up front");
-            if entry_len == 1 {
-                let narrow = u8::try_from(code).expect("pre-117 type code fits u8");
-                self.state.write_u8(narrow, Section::Schema).await?;
-            } else {
+            if extended {
                 self.state
                     .write_u16(code, byte_order, Section::Schema)
                     .await?;
+            } else {
+                let narrow = u8::try_from(code).expect("pre-117 type code fits u8");
+                self.state.write_u8(narrow, Section::Schema).await?;
             }
         }
         if is_xml {

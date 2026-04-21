@@ -290,19 +290,23 @@ impl<W: Write + Seek> WriterState<W> {
         let slot_offset = index
             .checked_mul(8)
             .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| {
-                DtaError::format(
-                    section,
-                    self.position,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::VariableCount,
-                        max: u64::MAX,
-                        actual: u64::try_from(index).unwrap_or(u64::MAX).saturating_mul(8),
-                    },
-                )
-            })?;
+            .ok_or_else(|| map_slot_overflow_error(section, self.position, index))?;
         self.patch_u64_at(base + slot_offset, value, byte_order, section)
     }
+}
+
+/// Produces a [`FormatErrorKind::FieldTooLarge`] for a map-slot byte
+/// offset (`index * 8`) that overflows `u64`.
+fn map_slot_overflow_error(section: Section, position: u64, index: usize) -> DtaError {
+    DtaError::format(
+        section,
+        position,
+        FormatErrorKind::FieldTooLarge {
+            field: Field::VariableCount,
+            max: u64::MAX,
+            actual: u64::try_from(index).unwrap_or(u64::MAX).saturating_mul(8),
+        },
+    )
 }
 
 // -- String writing -----------------------------------------------------------
@@ -330,7 +334,7 @@ impl<W: Write> WriterState<W> {
         let position = self.position;
         let encoded = encode_value(value, self.encoding, section, field, position)?;
         if encoded.len() > len {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 section,
                 position,
                 FormatErrorKind::FieldTooLarge {
@@ -338,7 +342,8 @@ impl<W: Write> WriterState<W> {
                     max: u64::try_from(len).expect("field length exceeds u64"),
                     actual: u64::try_from(encoded.len()).expect("encoded length exceeds u64"),
                 },
-            ));
+            );
+            return Err(error);
         }
         self.buffer.clear();
         self.buffer.extend_from_slice(&encoded);

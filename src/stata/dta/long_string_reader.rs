@@ -83,13 +83,14 @@ impl<R: BufRead> LongStringReader<R> {
             .state
             .read_exact(gso_header.data_len, Section::LongStrings)?;
 
-        Ok(Some(LongString::new(
+        let long_string = LongString::new(
             gso_header.variable,
             gso_header.observation,
             gso_header.is_binary(),
             Cow::Borrowed(data),
             encoding,
-        )))
+        );
+        Ok(Some(long_string))
     }
 
     /// Skips all remaining long-string entries without processing
@@ -123,15 +124,17 @@ impl<R: BufRead> LongStringReader<R> {
     /// been fully consumed.
     pub fn into_value_label_reader(self) -> Result<ValueLabelReader<R>> {
         if !self.completed {
-            return Err(DtaError::io(
+            let error = DtaError::io(
                 Section::LongStrings,
                 std::io::Error::other(
                     "long-strings section must be fully consumed \
                      before transitioning to value-label reading",
                 ),
-            ));
+            );
+            return Err(error);
         }
-        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+        let reader = ValueLabelReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
@@ -177,12 +180,13 @@ impl<R: BufRead> LongStringReader<R> {
         let data_len = self.state.read_u32(byte_order, Section::LongStrings)?;
         let data_len = long_string_data_len_to_usize(data_len)?;
 
-        Ok(Some(GsoHeader {
+        let header = GsoHeader {
             variable,
             observation,
             gso_type,
             data_len,
-        }))
+        };
+        Ok(Some(header))
     }
 
     /// Reads the `(variable, observation)` index pair at the start of
@@ -231,11 +235,8 @@ impl<R: BufRead + Seek> LongStringReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Characteristics))?
             .characteristics();
         self.state.seek_to(offset, Section::Characteristics)?;
-        Ok(CharacteristicReader::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let reader = CharacteristicReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the data section.
@@ -251,7 +252,8 @@ impl<R: BufRead + Seek> LongStringReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?
             .records();
         self.state.seek_to(offset, Section::Records)?;
-        Ok(RecordReader::new(self.state, self.header, self.schema))
+        let reader = RecordReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the value-label section.
@@ -267,7 +269,8 @@ impl<R: BufRead + Seek> LongStringReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::ValueLabels))?
             .value_labels();
         self.state.seek_to(offset, Section::ValueLabels)?;
-        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+        let reader = ValueLabelReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the start of the long-strings section.
@@ -289,6 +292,7 @@ impl<R: BufRead + Seek> LongStringReader<R> {
         if let Some(offset) = long_strings_offset {
             self.state.seek_to(offset, Section::LongStrings)?;
         }
-        Ok(Self::new(self.state, self.header, self.schema))
+        let reader = Self::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }

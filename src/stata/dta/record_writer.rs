@@ -145,7 +145,8 @@ impl<W: Write + Seek> RecordWriter<W> {
 
         self.patch_header_observation_count()?;
 
-        Ok(LongStringWriter::new(self.state, self.header, self.schema))
+        let writer = LongStringWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     /// Emits the XML `<data>` tag on first use. No-op for binary

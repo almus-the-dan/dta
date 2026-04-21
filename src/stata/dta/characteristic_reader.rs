@@ -139,7 +139,8 @@ impl<R: BufRead> CharacteristicReader<R> {
             self.compute_binary_section_offsets()?;
         }
 
-        Ok(RecordReader::new(self.state, self.header, self.schema))
+        let reader = RecordReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
@@ -205,7 +206,6 @@ impl<R: BufRead> CharacteristicReader<R> {
 
     /// Skips all remaining XML characteristic entries.
     fn skip_xml_characteristics(&mut self) -> Result<()> {
-        let byte_order = self.header.byte_order();
         loop {
             match self.read_xml_tag()? {
                 XmlCharacteristicTag::SectionOpen => {}
@@ -214,6 +214,7 @@ impl<R: BufRead> CharacteristicReader<R> {
                     return Ok(());
                 }
                 XmlCharacteristicTag::EntryOpen => {
+                    let byte_order = self.header.byte_order();
                     let length = self.state.read_u32(byte_order, Section::Characteristics)?;
                     let length = expansion_length_to_usize(length)?;
                     self.state.skip(length, Section::Characteristics)?;
@@ -373,7 +374,8 @@ impl<R: BufRead> CharacteristicReader<R> {
         )?;
 
         let target = CharacteristicTarget::from_variable_name(variable_name);
-        Ok(Characteristic::new(target, characteristic_name, value))
+        let characteristic = Characteristic::new(target, characteristic_name, value);
+        Ok(characteristic)
     }
 }
 
@@ -395,7 +397,8 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Characteristics))?
             .characteristics();
         self.state.seek_to(offset, Section::Characteristics)?;
-        Ok(Self::new(self.state, self.header, self.schema))
+        let reader = Self::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks past characteristics and transitions to record reading.
@@ -417,7 +420,8 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?
             .records();
         self.state.seek_to(offset, Section::Records)?;
-        Ok(RecordReader::new(self.state, self.header, self.schema))
+        let reader = RecordReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the value-label section.
@@ -439,7 +443,8 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::ValueLabels))?
             .value_labels();
         self.state.seek_to(offset, Section::ValueLabels)?;
-        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+        let reader = ValueLabelReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the long-string section.
@@ -461,7 +466,8 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
         if let Some(offset) = long_strings_offset {
             self.state.seek_to(offset, Section::LongStrings)?;
         }
-        Ok(LongStringReader::new(self.state, self.header, self.schema))
+        let reader = LongStringReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 

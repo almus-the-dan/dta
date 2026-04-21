@@ -18,11 +18,8 @@ pub(super) fn parse_binary_release(byte: u8) -> Result<Release> {
     let release =
         Release::try_from(byte).map_err(|kind| DtaError::format(Section::Header, 0, kind))?;
     if release.is_xml_like() {
-        return Err(DtaError::format(
-            Section::Header,
-            0,
-            FormatErrorKind::InvalidMagic,
-        ));
+        let error = DtaError::format(Section::Header, 0, FormatErrorKind::InvalidMagic);
+        return Err(error);
     }
     Ok(release)
 }
@@ -35,23 +32,18 @@ pub(super) fn parse_binary_byte_order(byte: u8) -> Result<ByteOrder> {
 }
 
 /// Parses a 3-byte ASCII release number from the XML `<release>` tag.
-/// Rejects pre-117 releases — those are binary-format only and
+/// Rejects pre-117 releases — those are binary-format only, and
 /// appearing inside XML tags is a malformed file.
 pub(super) fn parse_xml_release(buffer: &[u8], position: u64) -> Result<Release> {
     debug_assert_eq!(buffer.len(), 3, "XML release buffer must be 3 bytes");
-    let release = ascii_digits_to_u8(buffer[0], buffer[1], buffer[2]).ok_or(DtaError::format(
-        Section::Header,
-        position,
-        FormatErrorKind::InvalidMagic,
-    ))?;
+    let release = ascii_digits_to_u8(buffer[0], buffer[1], buffer[2]).ok_or_else(|| {
+        DtaError::format(Section::Header, position, FormatErrorKind::InvalidMagic)
+    })?;
     let release = Release::try_from(release)
         .map_err(|kind| DtaError::format(Section::Header, position, kind))?;
     if !release.is_xml_like() {
-        return Err(DtaError::format(
-            Section::Header,
-            position,
-            FormatErrorKind::InvalidMagic,
-        ));
+        let error = DtaError::format(Section::Header, position, FormatErrorKind::InvalidMagic);
+        return Err(error);
     }
     Ok(release)
 }

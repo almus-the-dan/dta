@@ -42,11 +42,12 @@ pub(super) fn build_old_slot_table<'a>(
     for entry in table.entries() {
         let value = entry.value();
         if !(0..=OLD_VALUE_LABEL_MAX_VALUE).contains(&value) {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::ValueLabels,
                 position,
                 FormatErrorKind::OldValueLabelValueOutOfRange { value },
-            ));
+            );
+            return Err(error);
         }
         // Verified above
         let slot = usize::try_from(value).expect("0..=OLD_VALUE_LABEL_MAX_VALUE fits usize");
@@ -55,25 +56,27 @@ pub(super) fn build_old_slot_table<'a>(
             slots.resize(slot + 1, None);
         }
         if slots[slot].is_some() {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::ValueLabels,
                 position,
                 FormatErrorKind::OldValueLabelValueOutOfRange { value },
-            ));
+            );
+            return Err(error);
         }
 
         let (encoded, _, had_unmappable) = encoding.encode(entry.label());
         if had_unmappable {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::ValueLabels,
                 position,
                 FormatErrorKind::InvalidEncoding {
                     field: Field::ValueLabelEntry,
                 },
-            ));
+            );
+            return Err(error);
         }
         if encoded.len() > 8 {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::ValueLabels,
                 position,
                 FormatErrorKind::FieldTooLarge {
@@ -81,7 +84,8 @@ pub(super) fn build_old_slot_table<'a>(
                     max: 8,
                     actual: u64::try_from(encoded.len()).unwrap_or(u64::MAX),
                 },
-            ));
+            );
+            return Err(error);
         }
         slots[slot] = Some(encoded);
     }
@@ -105,9 +109,9 @@ pub(super) fn build_modern_text_payload<'a>(
     encoding: &'static Encoding,
     position: u64,
 ) -> Result<ModernTextPayload<'a>> {
-    let mut encoded_labels: Vec<Cow<'a, [u8]>> = Vec::with_capacity(entries.len());
-    let mut offsets: Vec<u32> = Vec::with_capacity(entries.len());
-    let mut running_len: usize = 0;
+    let mut encoded_labels = Vec::with_capacity(entries.len());
+    let mut offsets = Vec::with_capacity(entries.len());
+    let mut running_len = 0;
     for entry in entries {
         let (encoded, _, had_unmappable) = encoding.encode(entry.label());
         if had_unmappable {
@@ -147,4 +151,76 @@ pub(super) fn text_overflow(position: u64, actual: usize) -> DtaError {
             actual: u64::try_from(actual).unwrap_or(u64::MAX),
         },
     )
+}
+
+/// Narrows the V104 table size (`slot_count * 8`) to `u16`, producing
+/// a [`FormatErrorKind::FieldTooLarge`] at `position` on overflow.
+pub(super) fn narrow_slot_count_to_table_len(slot_count: usize, position: u64) -> Result<u16> {
+    slot_count
+        .checked_mul(8)
+        .and_then(|n| u16::try_from(n).ok())
+        .ok_or_else(|| {
+            let actual = u64::try_from(slot_count)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(8);
+            DtaError::format(
+                Section::ValueLabels,
+                position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::ValueLabelEntry,
+                    max: u64::from(u16::MAX),
+                    actual,
+                },
+            )
+        })
+}
+
+/// Narrows the modern-layout entry count (`entries.len()`) to `u32`,
+/// producing a [`FormatErrorKind::FieldTooLarge`] at `position` on
+/// overflow.
+pub(super) fn narrow_entry_count_to_u32(entries_len: usize, position: u64) -> Result<u32> {
+    u32::try_from(entries_len).map_err(|_| {
+        DtaError::format(
+            Section::ValueLabels,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::ValueLabelEntry,
+                max: u64::from(u32::MAX),
+                actual: u64::try_from(entries_len).unwrap_or(u64::MAX),
+            },
+        )
+    })
+}
+
+/// Computes the modern value-label payload's `table_len` field as a
+/// `u32`. Layout: `8 (header) + 8*n (offsets + values) + text_len`.
+/// Returns a [`FormatErrorKind::FieldTooLarge`] at `position` if any
+/// step overflows.
+pub(super) fn modern_payload_bytes(entry_count: u32, text_len: u32, position: u64) -> Result<u32> {
+    let payload_bytes = u64::from(entry_count)
+        .checked_mul(8)
+        .and_then(|n| n.checked_add(8))
+        .and_then(|n| n.checked_add(u64::from(text_len)))
+        .ok_or_else(|| {
+            DtaError::format(
+                Section::ValueLabels,
+                position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::ValueLabelEntry,
+                    max: u64::from(u32::MAX),
+                    actual: u64::MAX,
+                },
+            )
+        })?;
+    u32::try_from(payload_bytes).map_err(|_| {
+        DtaError::format(
+            Section::ValueLabels,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::ValueLabelEntry,
+                max: u64::from(u32::MAX),
+                actual: payload_bytes,
+            },
+        )
+    })
 }

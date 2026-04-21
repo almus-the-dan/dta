@@ -178,13 +178,24 @@ impl Release {
 // ---------------------------------------------------------------------------
 
 impl Release {
+    /// Whether each type list entry is stored as `u16` (format 117+).
+    /// Earlier formats use `u8`.
+    #[must_use]
+    pub(crate) fn supports_extended_type_list_entry(self) -> bool {
+        self >= Self::V117
+    }
+
     /// The width of each type-list entry in bytes.
     ///
     /// Formats before 117 use 1-byte type codes; 117+ use 2-byte codes
     /// (needed for strL and the wider numeric codes).
     #[must_use]
     pub(crate) fn type_list_entry_len(self) -> usize {
-        if self >= Self::V117 { 2 } else { 1 }
+        if self.supports_extended_type_list_entry() {
+            2
+        } else {
+            1
+        }
     }
 
     /// Fixed-length variable name field size (includes null terminator).
@@ -237,9 +248,17 @@ impl Release {
     /// Whether each sort-list entry is stored as `u32` (format 119+).
     /// Earlier formats use `u16`.
     #[must_use]
-    #[inline]
     pub(crate) fn supports_extended_sort_entry(self) -> bool {
         self >= Self::V119
+    }
+
+    #[must_use]
+    pub(crate) fn sort_entry_len(self) -> usize {
+        if self.supports_extended_sort_entry() {
+            4
+        } else {
+            2
+        }
     }
 
     /// Maximum byte length of a fixed-length string variable.

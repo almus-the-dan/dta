@@ -115,27 +115,27 @@ impl SchemaBuilder {
                     variable_count,
                 })?;
             if index_usize >= variable_count {
-                return Err(DtaError::SortOrderOutOfBounds {
+                let error = DtaError::SortOrderOutOfBounds {
                     index,
                     variable_count,
-                });
+                };
+                return Err(error);
             }
         }
-        let mut row_len = 0usize;
-        let variables = self
-            .variables
-            .into_iter()
-            .map(|builder| {
-                let width = builder.variable_type().width();
-                let variable = builder.offset(row_len).build();
-                row_len += width;
-                variable
-            })
-            .collect();
-        Ok(Schema {
+        let mut row_len = 0;
+        let mut variables = Vec::with_capacity(self.variables.len());
+        for builder in self.variables {
+            let variable_type = builder.variable_type();
+            let width = variable_type.width();
+            let variable = builder.offset(row_len).build();
+            row_len += width;
+            variables.push(variable);
+        }
+        let schema = Schema {
             variables,
             sort_order: self.sort_order,
             row_len,
-        })
+        };
+        Ok(schema)
     }
 }

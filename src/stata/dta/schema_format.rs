@@ -18,14 +18,15 @@ pub(super) fn validate_variable_types(
 ) -> Result<()> {
     for variable in schema.variables() {
         if variable.variable_type().try_to_u16(release).is_none() {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::Schema,
                 position,
                 FormatErrorKind::UnsupportedVariableType {
                     variable_type: variable.variable_type(),
                     release,
                 },
-            ));
+            );
+            return Err(error);
         }
     }
     Ok(())

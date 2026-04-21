@@ -91,7 +91,8 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
             .timestamp(timestamp)
             .build();
         let state = self.state.with_encoding(encoding);
-        Ok(AsyncSchemaReader::new(state, header))
+        let reader = AsyncSchemaReader::new(state, header);
+        Ok(reader)
     }
 }
 
@@ -315,7 +316,8 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     /// prefix) should not call this.
     async fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
         let buffer = self.state.read_exact(len, Section::Header).await?;
-        Ok(parse_fixed_timestamp(buffer))
+        let timestamp = parse_fixed_timestamp(buffer);
+        Ok(timestamp)
     }
 }
 

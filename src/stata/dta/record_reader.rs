@@ -82,7 +82,8 @@ impl<R: BufRead> RecordReader<R> {
         let encoding = self.state.encoding();
         let row_bytes = self.state.buffer();
         let values = parse_row(row_bytes, &self.schema, byte_order, release, encoding)?;
-        Ok(Some(Record::new(values)))
+        let record = Record::new(values);
+        Ok(Some(record))
     }
 
     /// Reads the next observation without parsing individual values.
@@ -101,13 +102,14 @@ impl<R: BufRead> RecordReader<R> {
             return Ok(None);
         }
 
-        Ok(Some(LazyRecord::new(
+        let record = LazyRecord::new(
             self.state.buffer(),
             self.schema.variables(),
             self.header.release(),
             self.header.byte_order(),
             self.state.encoding(),
-        )))
+        );
+        Ok(Some(record))
     }
 
     /// Skips all remaining data records without processing them.
@@ -155,15 +157,17 @@ impl<R: BufRead> RecordReader<R> {
     /// fully consumed.
     pub fn into_long_string_reader(self) -> Result<LongStringReader<R>> {
         if !self.completed {
-            return Err(DtaError::io(
+            let error = DtaError::io(
                 Section::Records,
                 std::io::Error::other(
                     "data section must be fully consumed \
                      before transitioning to long-string reading",
                 ),
-            ));
+            );
+            return Err(error);
         }
-        Ok(LongStringReader::new(self.state, self.header, self.schema))
+        let reader = LongStringReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
@@ -238,11 +242,8 @@ impl<R: BufRead + Seek> RecordReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Characteristics))?
             .characteristics();
         self.state.seek_to(offset, Section::Characteristics)?;
-        Ok(CharacteristicReader::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let reader = CharacteristicReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the start of the data section.
@@ -258,7 +259,8 @@ impl<R: BufRead + Seek> RecordReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?
             .records();
         self.state.seek_to(offset, Section::Records)?;
-        Ok(Self::new(self.state, self.header, self.schema))
+        let reader = Self::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks past remaining data records and transitions to
@@ -275,7 +277,8 @@ impl<R: BufRead + Seek> RecordReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::ValueLabels))?
             .value_labels();
         self.state.seek_to(offset, Section::ValueLabels)?;
-        Ok(ValueLabelReader::new(self.state, self.header, self.schema))
+        let reader = ValueLabelReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the long-string section.
@@ -297,6 +300,7 @@ impl<R: BufRead + Seek> RecordReader<R> {
         if let Some(offset) = long_strings_offset {
             self.state.seek_to(offset, Section::LongStrings)?;
         }
-        Ok(LongStringReader::new(self.state, self.header, self.schema))
+        let reader = LongStringReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }

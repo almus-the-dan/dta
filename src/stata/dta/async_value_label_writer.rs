@@ -1,11 +1,14 @@
 use tokio::io::{AsyncSeek, AsyncWrite, AsyncWriteExt};
 
 use super::async_writer_state::AsyncWriterState;
-use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::dta_error::{DtaError, Field, Result, Section};
 use super::header::Header;
 use super::schema::Schema;
 use super::value_label::ValueLabelTable;
-use super::value_label_format::{build_modern_text_payload, build_old_slot_table};
+use super::value_label_format::{
+    build_modern_text_payload, build_old_slot_table, modern_payload_bytes,
+    narrow_entry_count_to_u32, narrow_slot_count_to_table_len,
+};
 
 /// Writes value-label tables asynchronously — the last section of a
 /// DTA file.
@@ -136,27 +139,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
         let position_before = self.state.position();
 
         let slots = build_old_slot_table(table, self.state.encoding(), position_before)?;
-        let slot_count = slots.len();
-        let table_len_u16 = slot_count
-            .checked_mul(8)
-            .and_then(|n| u16::try_from(n).ok())
-            .ok_or_else(|| {
-                // `actual` is only for error display — saturate at u64::MAX
-                // so we report a useful number even if `slot_count * 8`
-                // overflows `usize` on a 16-bit target.
-                let actual = u64::try_from(slot_count)
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(8);
-                DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::ValueLabelEntry,
-                        max: u64::from(u16::MAX),
-                        actual,
-                    },
-                )
-            })?;
+        let table_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
 
         self.state
             .write_u16(table_len_u16, byte_order, Section::ValueLabels)
@@ -196,45 +179,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
 
         let (encoded_labels, offsets, text_len) =
             build_modern_text_payload(entries, self.state.encoding(), position_before)?;
-        let entry_count = u32::try_from(entries.len()).map_err(|_| {
-            DtaError::format(
-                Section::ValueLabels,
-                position_before,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::ValueLabelEntry,
-                    max: u64::from(u32::MAX),
-                    actual: u64::try_from(entries.len()).unwrap_or(u64::MAX),
-                },
-            )
-        })?;
-
-        // Payload bytes = 8 (n + text_len) + 4*n (offsets) + 4*n (values) + text_len.
-        let payload_bytes = u64::from(entry_count)
-            .checked_mul(8)
-            .and_then(|n| n.checked_add(8))
-            .and_then(|n| n.checked_add(u64::from(text_len)))
-            .ok_or_else(|| {
-                DtaError::format(
-                    Section::ValueLabels,
-                    position_before,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::ValueLabelEntry,
-                        max: u64::from(u32::MAX),
-                        actual: u64::MAX,
-                    },
-                )
-            })?;
-        let table_len = u32::try_from(payload_bytes).map_err(|_| {
-            DtaError::format(
-                Section::ValueLabels,
-                position_before,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::ValueLabelEntry,
-                    max: u64::from(u32::MAX),
-                    actual: payload_bytes,
-                },
-            )
-        })?;
+        let entry_count = narrow_entry_count_to_u32(entries.len(), position_before)?;
+        let table_len = modern_payload_bytes(entry_count, text_len, position_before)?;
 
         if release.is_xml_like() {
             self.state
@@ -306,6 +252,7 @@ mod tests {
 
     use super::*;
     use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::dta_error::FormatErrorKind;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;

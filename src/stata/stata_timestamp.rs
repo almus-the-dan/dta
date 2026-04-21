@@ -50,13 +50,14 @@ impl StataTimestamp {
             return Err(StataError::InvalidTimestamp);
         }
 
-        Ok(Self {
+        let timestamp = Self {
             day,
             month,
             year,
             hour,
             minute,
-        })
+        };
+        Ok(timestamp)
     }
 
     /// Day of the month (1–31).

@@ -78,11 +78,12 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
     pub async fn write_long_string(&mut self, long_string: &LongString<'_>) -> Result<()> {
         let release = self.header.release();
         if !release.supports_long_strings() {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::LongStrings,
                 self.state.position(),
                 FormatErrorKind::LongStringsUnsupported { release },
-            ));
+            );
+            return Err(error);
         }
         if release.is_xml_like() {
             self.open_section_if_needed().await?;
@@ -147,11 +148,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
                 .await?;
         }
 
-        Ok(AsyncValueLabelWriter::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let writer = AsyncValueLabelWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     /// Emits the XML `<strls>` tag on first use. Only called on

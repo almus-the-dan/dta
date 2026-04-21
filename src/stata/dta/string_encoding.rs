@@ -21,11 +21,12 @@ pub(super) fn encode_value<'a>(
 ) -> Result<Cow<'a, [u8]>> {
     let (encoded, _, had_unmappable) = encoding.encode(value);
     if had_unmappable {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             section,
             position,
             FormatErrorKind::InvalidEncoding { field },
-        ));
+        );
+        return Err(error);
     }
     Ok(encoded)
 }

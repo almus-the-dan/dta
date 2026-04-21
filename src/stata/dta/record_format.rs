@@ -36,14 +36,15 @@ pub(super) fn validate_record_arity(
     position: u64,
 ) -> Result<()> {
     if actual_len != expected_len {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::Records,
             position,
             FormatErrorKind::RecordArityMismatch {
                 expected: u64::try_from(expected_len).unwrap_or(u64::MAX),
                 actual: u64::try_from(actual_len).unwrap_or(u64::MAX),
             },
-        ));
+        );
+        return Err(error);
     }
     Ok(())
 }
@@ -57,17 +58,19 @@ pub(super) fn validate_record_value_types(
     position: u64,
 ) -> Result<()> {
     for (index, value) in values.iter().enumerate() {
-        let expected = variables[index].variable_type();
+        let variable = &variables[index];
+        let expected = variable.variable_type();
         if !value_matches(expected, value) {
             let variable_index = narrow_variable_index(index, position)?;
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::Records,
                 position,
                 FormatErrorKind::RecordValueTypeMismatch {
                     variable_index,
                     expected,
                 },
-            ));
+            );
+            return Err(error);
         }
     }
     Ok(())
@@ -118,7 +121,7 @@ pub(super) fn observation_count_overflow_error(position: u64) -> DtaError {
 pub(super) fn encode_u48(value: u64, byte_order: ByteOrder, position: u64) -> Result<[u8; 6]> {
     const MAX_U48: u64 = (1u64 << 48) - 1;
     if value > MAX_U48 {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::Records,
             position,
             FormatErrorKind::FieldTooLarge {
@@ -126,7 +129,8 @@ pub(super) fn encode_u48(value: u64, byte_order: ByteOrder, position: u64) -> Re
                 max: MAX_U48,
                 actual: value,
             },
-        ));
+        );
+        return Err(error);
     }
     let bytes8 = byte_order.write_u64(value);
     let slice = match byte_order {
@@ -154,16 +158,17 @@ pub(super) fn encode_record_string<'a>(
 ) -> Result<Cow<'a, [u8]>> {
     let (encoded, _, had_unmappable) = encoding.encode(text);
     if had_unmappable {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::Records,
             position,
             FormatErrorKind::InvalidEncoding {
                 field: Field::VariableValue,
             },
-        ));
+        );
+        return Err(error);
     }
     if encoded.len() > usize::from(width) {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::Records,
             position,
             FormatErrorKind::RecordStringTooLong {
@@ -171,7 +176,8 @@ pub(super) fn encode_record_string<'a>(
                 max: width,
                 actual: u32::try_from(encoded.len()).unwrap_or(u32::MAX),
             },
-        ));
+        );
+        return Err(error);
     }
     Ok(encoded)
 }

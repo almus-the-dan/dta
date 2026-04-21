@@ -68,7 +68,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {
             self.write_binary_header(&header).await?;
         }
 
-        Ok(AsyncSchemaWriter::new(self.state, header))
+        let writer = AsyncSchemaWriter::new(self.state, header);
+        Ok(writer)
     }
 }
 

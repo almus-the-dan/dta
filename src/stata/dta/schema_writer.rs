@@ -136,7 +136,8 @@ impl<W: Write + Seek> SchemaWriter<W> {
 
         self.finalize_schema_section(&descriptor_offsets)?;
 
-        Ok(CharacteristicWriter::new(self.state, self.header, schema))
+        let writer = CharacteristicWriter::new(self.state, self.header, schema);
+        Ok(writer)
     }
 
     /// Seek-patches the header's K (variable count) field with

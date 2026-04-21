@@ -28,11 +28,12 @@ use super::variable_type::VariableType;
 /// [`InvalidVariableType`](FormatErrorKind::InvalidVariableType) error.
 pub(super) fn parse_type_code(code: u16, release: Release, position: u64) -> Result<VariableType> {
     let invalid = || {
-        Err(DtaError::format(
+        let error = DtaError::format(
             Section::Schema,
             position,
             FormatErrorKind::InvalidVariableType { code },
-        ))
+        );
+        Err(error)
     };
 
     if release >= Release::V117 {
@@ -92,6 +93,44 @@ pub(super) fn buffer_size(count: usize, entry_len: usize, position: u64) -> Resu
     count
         .checked_mul(entry_len)
         .ok_or_else(|| section_size_overflow_error(position))
+}
+
+/// Narrows the header's `u32` variable count to `usize`. Fires when
+/// the declared count exceeds the platform's address space (e.g., a
+/// 16-bit target facing a V119 file with > 65k variables). Returns
+/// a [`FormatErrorKind::FieldTooLarge`] tagged with
+/// `Field::VariableCount`.
+pub(super) fn narrow_variable_count_to_usize(declared: u32, position: u64) -> Result<usize> {
+    usize::try_from(declared).map_err(|_| {
+        DtaError::format(
+            Section::Schema,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::VariableCount,
+                max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+                actual: u64::from(declared),
+            },
+        )
+    })
+}
+
+/// Computes the sort-list entry count (`variable_count + 1`, since
+/// the on-disk list is zero-terminated). Returns a
+/// [`FormatErrorKind::FieldTooLarge`] at `position` on overflow.
+pub(super) fn sort_entry_count(variable_count: usize, position: u64) -> Result<usize> {
+    variable_count.checked_add(1).ok_or_else(|| {
+        DtaError::format(
+            Section::Schema,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::VariableCount,
+                max: u64::from(u32::MAX),
+                actual: u64::try_from(variable_count)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            },
+        )
+    })
 }
 
 /// Shared constructor for the "schema section size overflowed the

@@ -33,8 +33,9 @@ impl<W> HeaderWriter<W> {
         // The initial encoding is a placeholder — it is replaced once
         // the header's release is known (or kept if an override was given).
         let initial_encoding = encoding.unwrap_or(encoding_rs::UTF_8);
+        let state = WriterState::new(writer, initial_encoding);
         Self {
-            state: WriterState::new(writer, initial_encoding),
+            state,
             encoding_override: encoding,
         }
     }
@@ -69,7 +70,8 @@ impl<W: Write + Seek> HeaderWriter<W> {
             self.write_binary_header(&header)?;
         }
 
-        Ok(SchemaWriter::new(self.state, header))
+        let writer = SchemaWriter::new(self.state, header);
+        Ok(writer)
     }
 }
 

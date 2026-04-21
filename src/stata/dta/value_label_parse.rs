@@ -67,6 +67,23 @@ pub(super) fn overflow_error() -> DtaError {
     )
 }
 
+/// Narrows a V104 entry index (`usize`) to `i32` — the legacy layout
+/// uses the entry's position as its value. Produces a
+/// [`FormatErrorKind::FieldTooLarge`] on overflow.
+pub(super) fn entry_index_to_i32(entry_index: usize) -> Result<i32> {
+    i32::try_from(entry_index).map_err(|_| {
+        DtaError::format(
+            Section::ValueLabels,
+            0,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::ValueLabelEntry,
+                max: u64::try_from(i32::MAX).unwrap_or(u64::MAX),
+                actual: u64::try_from(entry_index).unwrap_or(u64::MAX),
+            },
+        )
+    })
+}
+
 /// Parses the modern value-label payload:
 /// `n` (u32), `txtlen` (u32), `off[n]` (u32 each), `val[n]` (i32 each),
 /// `txt[txtlen]`.
@@ -77,14 +94,15 @@ pub(super) fn parse_modern_payload(
     table_name: &str,
 ) -> Result<ValueLabelTable> {
     if payload.len() < 8 {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::ValueLabels,
             0,
             FormatErrorKind::Truncated {
                 expected: 8,
                 actual: u64::try_from(payload.len()).unwrap_or(u64::MAX),
             },
-        ));
+        );
+        return Err(error);
     }
 
     let entry_count = byte_order.read_u32([payload[0], payload[1], payload[2], payload[3]]);
@@ -104,14 +122,15 @@ pub(super) fn parse_modern_payload(
         .ok_or_else(overflow_error)?;
 
     if payload.len() < expected_len {
-        return Err(DtaError::format(
+        let error = DtaError::format(
             Section::ValueLabels,
             0,
             FormatErrorKind::Truncated {
                 expected: u64::try_from(expected_len).unwrap_or(u64::MAX),
                 actual: u64::try_from(payload.len()).unwrap_or(u64::MAX),
             },
-        ));
+        );
+        return Err(error);
     }
 
     let offsets_start = 8;
@@ -130,14 +149,15 @@ pub(super) fn parse_modern_payload(
         let text_offset_usize = usize::try_from(text_offset).map_err(|_| overflow_error())?;
 
         if text_offset_usize >= text_len_usize {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::ValueLabels,
                 0,
                 FormatErrorKind::Truncated {
                     expected: u64::from(text_offset) + 1,
                     actual: u64::from(text_len),
                 },
-            ));
+            );
+            return Err(error);
         }
 
         let value_position = values_start + 4 * entry_index;
@@ -151,8 +171,10 @@ pub(super) fn parse_modern_payload(
         let label_bytes = &payload[text_start + text_offset_usize..];
         let label = decode_label(label_bytes, text_len_usize - text_offset_usize, encoding)?;
 
-        entries.push(ValueLabelEntry::new(value, label));
+        let entry = ValueLabelEntry::new(value, label);
+        entries.push(entry);
     }
 
-    Ok(ValueLabelTable::new(table_name.to_owned(), entries))
+    let table = ValueLabelTable::new(table_name.to_owned(), entries);
+    Ok(table)
 }

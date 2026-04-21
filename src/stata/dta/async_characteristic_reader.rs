@@ -120,7 +120,8 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
         if !self.header.release().is_xml_like() {
             self.compute_binary_section_offsets()?;
         }
-        Ok(AsyncRecordReader::new(self.state, self.header, self.schema))
+        let reader = AsyncRecordReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
@@ -366,7 +367,8 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
             .await?;
 
         let target = CharacteristicTarget::from_variable_name(variable_name);
-        Ok(Characteristic::new(target, characteristic_name, value))
+        let characteristic = Characteristic::new(target, characteristic_name, value);
+        Ok(characteristic)
     }
 }
 

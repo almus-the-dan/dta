@@ -26,15 +26,11 @@ pub(super) fn parse_row<'a>(
     let mut values = Vec::with_capacity(variables.len());
     for variable in variables {
         let offset = variable.offset();
-        let width = variable.variable_type().width();
+        let variable_type = variable.variable_type();
+        let width = variable_type.width();
         let column_bytes = &row_bytes[offset..offset + width];
-        let value = Value::from_column_bytes(
-            column_bytes,
-            variable.variable_type(),
-            byte_order,
-            release,
-            encoding,
-        )?;
+        let value =
+            Value::from_column_bytes(column_bytes, variable_type, byte_order, release, encoding)?;
         values.push(value);
     }
     Ok(values)

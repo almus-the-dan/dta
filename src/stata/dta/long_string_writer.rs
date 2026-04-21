@@ -77,11 +77,12 @@ impl<W: Write + Seek> LongStringWriter<W> {
     pub fn write_long_string(&mut self, long_string: &LongString<'_>) -> Result<()> {
         let release = self.header.release();
         if !release.supports_long_strings() {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::LongStrings,
                 self.state.position(),
                 FormatErrorKind::LongStringsUnsupported { release },
-            ));
+            );
+            return Err(error);
         }
         if release.is_xml_like() {
             self.open_section_if_needed()?;
@@ -145,11 +146,12 @@ impl<W: Write + Seek> LongStringWriter<W> {
         }
         // Pre-117: no `<strls>` section, no map — nothing to do.
 
-        Ok(ValueLabelWriter::new(self.state, self.header, self.schema))
+        let writer = ValueLabelWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     /// Emits the XML `<strls>` tag on first use. Only called on
-    /// paths that have already verified the release supports for
+    /// paths that have already verified the release supports
     /// long strings.
     fn open_section_if_needed(&mut self) -> Result<()> {
         if !self.opened {

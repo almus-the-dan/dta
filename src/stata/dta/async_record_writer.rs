@@ -136,11 +136,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
 
         self.patch_header_observation_count().await?;
 
-        Ok(AsyncLongStringWriter::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let writer = AsyncLongStringWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     async fn open_section_if_needed(&mut self) -> Result<()> {

@@ -2,13 +2,14 @@ use std::io::{BufRead, Read};
 
 use super::byte_order::ByteOrder;
 use super::characteristic_reader::CharacteristicReader;
-use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::dta_error::{Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::reader_state::ReaderState;
 use super::release::Release;
 use super::schema::Schema;
 use super::schema_parse::{
-    assemble_variables, buffer_size, offset_position, parse_type_code, read_u64_at,
+    assemble_variables, buffer_size, narrow_variable_count_to_usize, offset_position,
+    parse_type_code, read_u64_at, sort_entry_count,
 };
 use super::section_offsets::SectionOffsets;
 use super::string_decoding::decode_fixed_string;
@@ -61,18 +62,8 @@ impl<R: BufRead> SchemaReader<R> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let header_position = self.state.position();
-        let declared = self.header.variable_count();
-        let variable_count = usize::try_from(declared).map_err(|_| {
-            DtaError::format(
-                Section::Schema,
-                header_position,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::VariableCount,
-                    max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
-                    actual: u64::from(declared),
-                },
-            )
-        })?;
+        let variable_count =
+            narrow_variable_count_to_usize(self.header.variable_count(), header_position)?;
 
         // XML formats store section offsets in a map before the
         // descriptors; binary formats have no map.
@@ -111,7 +102,8 @@ impl<R: BufRead> SchemaReader<R> {
             .variables(variables)
             .sort_order(sort_order)
             .build()?;
-        Ok(CharacteristicReader::new(self.state, self.header, schema))
+        let reader = CharacteristicReader::new(self.state, self.header, schema);
+        Ok(reader)
     }
 }
 
@@ -156,12 +148,13 @@ impl<R: Read> SchemaReader<R> {
         let value_labels_offset = read_u64_at(buffer, 11, byte_order);
 
         self.expect_tag(b"</map>")?;
-        Ok(SectionOffsets::new(
+        let offsets = SectionOffsets::new(
             characteristics_offset,
             data_offset,
             value_labels_offset,
             Some(long_strings_offset),
-        ))
+        );
+        Ok(offsets)
     }
 }
 
@@ -179,21 +172,23 @@ impl<R: Read> SchemaReader<R> {
     ) -> Result<Vec<VariableType>> {
         self.expect_tag(b"<variable_types>")?;
 
+        let extended = release.supports_extended_type_list_entry();
         let entry_len = release.type_list_entry_len();
         let section_start = self.state.position();
         let total_bytes = buffer_size(variable_count, entry_len, section_start)?;
         let buffer = self.state.read_exact(total_bytes, Section::Schema)?;
 
         let mut types = Vec::with_capacity(variable_count);
+        let mut offset = 0;
         for index in 0..variable_count {
-            let code = if entry_len == 1 {
-                u16::from(buffer[index])
-            } else {
-                let offset = index * 2;
+            let code = if extended {
                 let bytes = [buffer[offset], buffer[offset + 1]];
                 byte_order.read_u16(bytes)
+            } else {
+                u16::from(buffer[index])
             };
-            let position = offset_position(section_start, index * entry_len)?;
+            offset += entry_len;
+            let position = offset_position(section_start, offset)?;
             types.push(parse_type_code(code, release, position)?);
         }
 
@@ -227,27 +222,15 @@ impl<R: Read> SchemaReader<R> {
         self.expect_tag(b"<sortlist>")?;
 
         let extended = release.supports_extended_sort_entry();
-        let entry_len = if extended { 4 } else { 2 };
+        let entry_len = release.sort_entry_len();
         let position = self.state.position();
-        let entry_count = variable_count.checked_add(1).ok_or_else(|| {
-            DtaError::format(
-                Section::Schema,
-                position,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::VariableCount,
-                    max: u64::from(u32::MAX),
-                    actual: u64::try_from(variable_count)
-                        .unwrap_or(u64::MAX)
-                        .saturating_add(1),
-                },
-            )
-        })?;
+        let entry_count = sort_entry_count(variable_count, position)?;
         let total_bytes = buffer_size(entry_count, entry_len, position)?;
         let buffer = self.state.read_exact(total_bytes, Section::Schema)?;
 
         let mut sort_order = Vec::new();
-        for index in 0..entry_count {
-            let offset = index * entry_len;
+        let mut offset = 0;
+        for _ in 0..entry_count {
             let index = if extended {
                 let bytes = [
                     buffer[offset],
@@ -260,6 +243,7 @@ impl<R: Read> SchemaReader<R> {
                 let bytes = [buffer[offset], buffer[offset + 1]];
                 u32::from(byte_order.read_u16(bytes))
             };
+            offset += entry_len;
 
             if index == 0 {
                 break;
@@ -337,17 +321,13 @@ impl<R: Read> SchemaReader<R> {
         let buffer = self.state.read_exact(total_bytes, Section::Schema)?;
 
         let mut result = Vec::with_capacity(count);
-        for index in 0..count {
-            let start = index * entry_len;
+        let mut start = 0;
+        for _ in 0..count {
             let position = offset_position(section_start, start)?;
             let raw = &buffer[start..start + entry_len];
-            result.push(decode_fixed_string(
-                raw,
-                encoding,
-                Section::Schema,
-                field,
-                position,
-            )?);
+            let value = decode_fixed_string(raw, encoding, Section::Schema, field, position)?;
+            result.push(value);
+            start += entry_len;
         }
 
         self.expect_tag(close_tag)?;

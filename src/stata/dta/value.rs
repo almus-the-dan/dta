@@ -85,13 +85,15 @@ impl<'a> Value<'a> {
 
 fn parse_byte(column_bytes: &[u8]) -> Result<Value<'_>> {
     let stata_value = StataByte::try_from(column_bytes[0]).map_err(|_| unrecognized_value())?;
-    Ok(Value::Byte(stata_value))
+    let value = Value::Byte(stata_value);
+    Ok(value)
 }
 
 fn parse_int(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
     let raw = byte_order.read_u16([column_bytes[0], column_bytes[1]]);
     let stata_value = StataInt::try_from(raw).map_err(|_| unrecognized_value())?;
-    Ok(Value::Int(stata_value))
+    let value = Value::Int(stata_value);
+    Ok(value)
 }
 
 fn parse_long(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
@@ -102,7 +104,8 @@ fn parse_long(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
         column_bytes[3],
     ]);
     let stata_value = StataLong::try_from(raw).map_err(|_| unrecognized_value())?;
-    Ok(Value::Long(stata_value))
+    let value = Value::Long(stata_value);
+    Ok(value)
 }
 
 fn parse_float(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
@@ -113,7 +116,8 @@ fn parse_float(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> 
         column_bytes[3],
     ]);
     let stata_value = StataFloat::try_from(raw).map_err(|_| unrecognized_value())?;
-    Ok(Value::Float(stata_value))
+    let value = Value::Float(stata_value);
+    Ok(value)
 }
 
 fn parse_double(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
@@ -128,7 +132,8 @@ fn parse_double(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>>
         column_bytes[7],
     ]);
     let stata_value = StataDouble::try_from(raw).map_err(|_| unrecognized_value())?;
-    Ok(Value::Double(stata_value))
+    let value = Value::Double(stata_value);
+    Ok(value)
 }
 
 fn parse_fixed_string<'a>(
@@ -175,7 +180,8 @@ fn parse_long_string_ref(
     } else {
         parse_classic_long_string_ref(column_bytes, byte_order)
     };
-    Value::LongStringRef(LongStringRef::new(variable, observation))
+    let long_string_ref = LongStringRef::new(variable, observation);
+    Value::LongStringRef(long_string_ref)
 }
 
 /// Format 118+: `v` = u16 (2 bytes), `o` = u48 (6 bytes).

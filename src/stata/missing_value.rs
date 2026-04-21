@@ -205,7 +205,8 @@ impl TryFrom<u8> for MissingValue {
         if !(MISSING_BYTE_SYSTEM..=MISSING_BYTE_Z).contains(&value) {
             return Err(StataError::NotMissingValue);
         }
-        from_code(u32::from(value - MISSING_BYTE_SYSTEM))
+        let remainder = u32::from(value - MISSING_BYTE_SYSTEM);
+        from_code(remainder)
     }
 }
 
@@ -219,7 +220,8 @@ impl TryFrom<u16> for MissingValue {
         if !(MISSING_INT_SYSTEM..=MISSING_INT_Z).contains(&value) {
             return Err(StataError::NotMissingValue);
         }
-        from_code(u32::from(value - MISSING_INT_SYSTEM))
+        let remainder = u32::from(value - MISSING_INT_SYSTEM);
+        from_code(remainder)
     }
 }
 
@@ -233,7 +235,8 @@ impl TryFrom<u32> for MissingValue {
         if !(MISSING_LONG_SYSTEM..=MISSING_LONG_Z).contains(&value) {
             return Err(StataError::NotMissingValue);
         }
-        from_code(value - MISSING_LONG_SYSTEM)
+        let remainder = value - MISSING_LONG_SYSTEM;
+        from_code(remainder)
     }
 }
 

@@ -9,8 +9,8 @@ use super::record_reader::RecordReader;
 use super::schema::Schema;
 use super::value_label::{ValueLabelEntry, ValueLabelTable};
 use super::value_label_parse::{
-    VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, overflow_error,
-    parse_modern_payload,
+    VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, entry_index_to_i32,
+    overflow_error, parse_modern_payload,
 };
 
 /// Reads value-label tables from a DTA file.
@@ -156,21 +156,13 @@ impl<R: BufRead> ValueLabelReader<R> {
                 continue;
             }
             let label = decode_label(label_bytes, 8, encoding)?;
-            let value = i32::try_from(entry_index).map_err(|_| {
-                DtaError::format(
-                    Section::ValueLabels,
-                    0,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::ValueLabelEntry,
-                        max: u64::try_from(i32::MAX).unwrap_or(u64::MAX),
-                        actual: u64::try_from(entry_index).unwrap_or(u64::MAX),
-                    },
-                )
-            })?;
-            entries.push(ValueLabelEntry::new(value, label));
+            let value = entry_index_to_i32(entry_index)?;
+            let entry = ValueLabelEntry::new(value, label);
+            entries.push(entry);
         }
 
-        Ok(Some(ValueLabelTable::new(name, entries)))
+        let table = ValueLabelTable::new(name, entries);
+        Ok(Some(table))
     }
 
     /// Reads the old-format table header (table length, name, padding).
@@ -181,7 +173,8 @@ impl<R: BufRead> ValueLabelReader<R> {
             self.completed = true;
             return Ok(None);
         };
-        Ok(Some(usize::from(table_len)))
+        let table_len = usize::from(table_len);
+        Ok(Some(table_len))
     }
 
     /// Skips one old-format table. Returns `false` at EOF.
@@ -311,11 +304,8 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Characteristics))?
             .characteristics();
         self.state.seek_to(offset, Section::Characteristics)?;
-        Ok(CharacteristicReader::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let reader = CharacteristicReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the data section.
@@ -331,7 +321,8 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?
             .records();
         self.state.seek_to(offset, Section::Records)?;
-        Ok(RecordReader::new(self.state, self.header, self.schema))
+        let reader = RecordReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the start of the value-labels section.
@@ -347,7 +338,8 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
             .ok_or_else(|| DtaError::missing_section_offsets(Section::ValueLabels))?
             .value_labels();
         self.state.seek_to(offset, Section::ValueLabels)?;
-        Ok(Self::new(self.state, self.header, self.schema))
+        let reader = Self::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 
     /// Seeks to the long-string section.
@@ -369,6 +361,7 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
         if let Some(offset) = long_strings_offset {
             self.state.seek_to(offset, Section::LongStrings)?;
         }
-        Ok(LongStringReader::new(self.state, self.header, self.schema))
+        let reader = LongStringReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }

@@ -345,18 +345,22 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncWriterState<W> {
         let slot_offset = index
             .checked_mul(8)
             .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| {
-                DtaError::format(
-                    section,
-                    self.position,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::VariableCount,
-                        max: u64::MAX,
-                        actual: u64::try_from(index).unwrap_or(u64::MAX).saturating_mul(8),
-                    },
-                )
-            })?;
+            .ok_or_else(|| map_slot_overflow_error(section, self.position, index))?;
         self.patch_u64_at(base + slot_offset, value, byte_order, section)
             .await
     }
+}
+
+/// Produces a [`FormatErrorKind::FieldTooLarge`] for a map-slot byte
+/// offset (`index * 8`) that overflows `u64`.
+fn map_slot_overflow_error(section: Section, position: u64, index: usize) -> DtaError {
+    DtaError::format(
+        section,
+        position,
+        FormatErrorKind::FieldTooLarge {
+            field: Field::VariableCount,
+            max: u64::MAX,
+            actual: u64::try_from(index).unwrap_or(u64::MAX).saturating_mul(8),
+        },
+    )
 }

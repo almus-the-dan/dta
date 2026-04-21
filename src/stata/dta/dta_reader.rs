@@ -106,7 +106,8 @@ impl DtaReader {
         let file = tokio::fs::File::open(path)
             .await
             .map_err(|e| DtaError::io(Section::Header, e))?;
-        Ok(self.from_tokio_file(file))
+        let reader = self.from_tokio_file(file);
+        Ok(reader)
     }
 
     /// Begins reading a DTA file from a [`tokio::fs::File`], wrapping
@@ -118,7 +119,8 @@ impl DtaReader {
         self,
         file: tokio::fs::File,
     ) -> AsyncHeaderReader<TokioBufReader<tokio::fs::File>> {
-        self.from_tokio_reader(TokioBufReader::new(file))
+        let reader = TokioBufReader::new(file);
+        self.from_tokio_reader(reader)
     }
 
     /// Begins reading a DTA file from any async reader, returning an

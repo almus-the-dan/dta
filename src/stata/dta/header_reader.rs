@@ -35,8 +35,9 @@ impl<R> HeaderReader<R> {
         // The initial encoding is a placeholder — it is replaced once
         // the release number is known (or kept if an override was given).
         let initial_encoding = encoding.unwrap_or(encoding_rs::UTF_8);
+        let state = ReaderState::new(reader, initial_encoding);
         Self {
-            state: ReaderState::new(reader, initial_encoding),
+            state,
             encoding_override: encoding,
         }
     }
@@ -82,7 +83,8 @@ impl<R: BufRead + Seek> HeaderReader<R> {
             .timestamp(timestamp)
             .build();
         let state = self.state.with_encoding(encoding);
-        Ok(SchemaReader::new(state, header))
+        let reader = SchemaReader::new(state, header);
+        Ok(reader)
     }
 }
 
@@ -308,7 +310,8 @@ impl<R: Read> HeaderReader<R> {
     /// prefix) should not call this.
     fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
         let buffer = self.state.read_exact(len, Section::Header)?;
-        Ok(parse_fixed_timestamp(buffer))
+        let timestamp = parse_fixed_timestamp(buffer);
+        Ok(timestamp)
     }
 }
 

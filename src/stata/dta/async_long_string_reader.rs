@@ -79,13 +79,14 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             .read_exact(gso_header.data_len, Section::LongStrings)
             .await?;
 
-        Ok(Some(LongString::new(
+        let long_string = LongString::new(
             gso_header.variable,
             gso_header.observation,
             gso_header.is_binary(),
             Cow::Borrowed(data),
             encoding,
-        )))
+        );
+        Ok(Some(long_string))
     }
 
     /// Skips all remaining long-string entries without processing
@@ -117,11 +118,8 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
     /// Returns [`DtaError::Io`] on read failures.
     pub async fn into_value_label_reader(mut self) -> Result<AsyncValueLabelReader<R>> {
         self.skip_to_end().await?;
-        Ok(AsyncValueLabelReader::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let reader = AsyncValueLabelReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
@@ -169,12 +167,13 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             .await?;
         let data_len = long_string_data_len_to_usize(data_len)?;
 
-        Ok(Some(GsoHeader {
+        let header = GsoHeader {
             variable,
             observation,
             gso_type,
             data_len,
-        }))
+        };
+        Ok(Some(header))
     }
 
     /// Reads the `(variable, observation)` index pair at the start of

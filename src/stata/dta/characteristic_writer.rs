@@ -90,11 +90,12 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     pub fn write_characteristic(&mut self, characteristic: &Characteristic) -> Result<()> {
         let release = self.header.release();
         let Some(is_extended) = release.supports_extended_expansion() else {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::Characteristics,
                 self.state.position(),
                 FormatErrorKind::CharacteristicsUnsupported { release },
-            ));
+            );
+            return Err(error);
         };
         if release.is_xml_like() {
             self.open_section_if_needed()?;
@@ -132,7 +133,8 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
                 .patch_map_entry(9, records_offset, byte_order, Section::Characteristics)?;
         }
 
-        Ok(RecordWriter::new(self.state, self.header, self.schema))
+        let writer = RecordWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     fn write_terminator(

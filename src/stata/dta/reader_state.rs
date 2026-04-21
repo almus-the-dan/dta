@@ -109,19 +109,22 @@ impl<R: Read> ReaderState<R> {
 
     pub fn read_u16(&mut self, byte_order: ByteOrder, section: Section) -> Result<u16> {
         let buffer = self.read_exact(2, section)?;
-        Ok(byte_order.read_u16([buffer[0], buffer[1]]))
+        let value = byte_order.read_u16([buffer[0], buffer[1]]);
+        Ok(value)
     }
 
     pub fn read_u32(&mut self, byte_order: ByteOrder, section: Section) -> Result<u32> {
         let buffer = self.read_exact(4, section)?;
-        Ok(byte_order.read_u32([buffer[0], buffer[1], buffer[2], buffer[3]]))
+        let value = byte_order.read_u32([buffer[0], buffer[1], buffer[2], buffer[3]]);
+        Ok(value)
     }
 
     pub fn read_u64(&mut self, byte_order: ByteOrder, section: Section) -> Result<u64> {
         let buffer = self.read_exact(8, section)?;
-        Ok(byte_order.read_u64([
+        let value = byte_order.read_u64([
             buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], buffer[7],
-        ]))
+        ]);
+        Ok(value)
     }
 
     /// Like [`read_exact`](Self::read_exact), but returns `None` on
@@ -164,7 +167,8 @@ impl<R: Read> ReaderState<R> {
         let position = self.position;
         let actual = self.read_exact(expected.len(), section)?;
         if actual != expected {
-            return Err(DtaError::format(section, position, on_mismatch));
+            let error = DtaError::format(section, position, on_mismatch);
+            return Err(error);
         }
         Ok(())
     }

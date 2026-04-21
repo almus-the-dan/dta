@@ -66,7 +66,8 @@ impl DtaWriter {
     #[inline]
     pub fn from_path(self, path: impl AsRef<Path>) -> Result<HeaderWriter<BufWriter<File>>> {
         let file = File::create(path).map_err(|e| DtaError::io(Section::Header, e))?;
-        Ok(self.from_file(file))
+        let writer = self.from_file(file);
+        Ok(writer)
     }
 
     /// Begins writing a DTA file to a [`File`], wrapping it in a
@@ -75,7 +76,8 @@ impl DtaWriter {
     #[must_use]
     #[inline]
     pub fn from_file(self, file: File) -> HeaderWriter<BufWriter<File>> {
-        self.from_writer(BufWriter::new(file))
+        let writer = BufWriter::new(file);
+        self.from_writer(writer)
     }
 
     /// Begins writing a DTA file to any `Write + Seek` sink,
@@ -114,7 +116,8 @@ impl DtaWriter {
         let file = tokio::fs::File::create(path)
             .await
             .map_err(|e| DtaError::io(Section::Header, e))?;
-        Ok(self.from_tokio_file(file))
+        let writer = self.from_tokio_file(file);
+        Ok(writer)
     }
 
     /// Begins writing a DTA file to a [`tokio::fs::File`], wrapping it
@@ -126,7 +129,8 @@ impl DtaWriter {
         self,
         file: tokio::fs::File,
     ) -> AsyncHeaderWriter<TokioBufWriter<tokio::fs::File>> {
-        self.from_tokio_writer(TokioBufWriter::new(file))
+        let writer = TokioBufWriter::new(file);
+        self.from_tokio_writer(writer)
     }
 
     /// Begins writing a DTA file to any async writer, returning an

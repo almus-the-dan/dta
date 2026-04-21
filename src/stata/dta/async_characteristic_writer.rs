@@ -88,11 +88,12 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     pub async fn write_characteristic(&mut self, characteristic: &Characteristic) -> Result<()> {
         let release = self.header.release();
         let Some(is_extended) = release.supports_extended_expansion() else {
-            return Err(DtaError::format(
+            let error = DtaError::format(
                 Section::Characteristics,
                 self.state.position(),
                 FormatErrorKind::CharacteristicsUnsupported { release },
-            ));
+            );
+            return Err(error);
         };
         if release.is_xml_like() {
             self.open_section_if_needed().await?;
@@ -130,7 +131,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
                 .await?;
         }
 
-        Ok(AsyncRecordWriter::new(self.state, self.header, self.schema))
+        let writer = AsyncRecordWriter::new(self.state, self.header, self.schema);
+        Ok(writer)
     }
 
     async fn write_terminator(

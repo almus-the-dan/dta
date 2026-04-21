@@ -75,7 +75,8 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
         let encoding = self.state.encoding();
         let row_bytes = self.state.buffer();
         let values = parse_row(row_bytes, &self.schema, byte_order, release, encoding)?;
-        Ok(Some(Record::new(values)))
+        let record = Record::new(values);
+        Ok(Some(record))
     }
 
     /// Reads the next observation without parsing individual values.
@@ -93,13 +94,14 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
             return Ok(None);
         }
 
-        Ok(Some(LazyRecord::new(
+        let record = LazyRecord::new(
             self.state.buffer(),
             self.schema.variables(),
             self.header.release(),
             self.header.byte_order(),
             self.state.encoding(),
-        )))
+        );
+        Ok(Some(record))
     }
 
     /// Skips all remaining data records without processing them.
@@ -135,11 +137,8 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
     /// Returns [`DtaError::Io`] on read failures.
     pub async fn into_long_string_reader(mut self) -> Result<AsyncLongStringReader<R>> {
         self.skip_to_end().await?;
-        Ok(AsyncLongStringReader::new(
-            self.state,
-            self.header,
-            self.schema,
-        ))
+        let reader = AsyncLongStringReader::new(self.state, self.header, self.schema);
+        Ok(reader)
     }
 }
 
