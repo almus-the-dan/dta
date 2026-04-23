@@ -121,12 +121,6 @@ impl<'a> LongString<'a> {
     /// encoding.
     #[must_use]
     pub fn data_str(&self) -> Option<Cow<'_, str>> {
-        let end = self
-            .data
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.data.len());
-        self.encoding
-            .decode_without_bom_handling_and_without_replacement(&self.data[..end])
+        super::string_decoding::decode_null_terminated(&self.data, self.encoding)
     }
 }

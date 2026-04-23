@@ -12,6 +12,7 @@ use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Result, Section};
 use super::long_string_ref::LongStringRef;
 use super::release::Release;
+use super::string_decoding::decode_null_terminated;
 use super::variable_type::VariableType;
 
 /// A single cell value from the data section of a DTA file.
@@ -140,27 +141,19 @@ fn parse_fixed_string<'a>(
     column_bytes: &'a [u8],
     encoding: &'static Encoding,
 ) -> Result<Value<'a>> {
-    let end = column_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(column_bytes.len());
-    let decoded = encoding
-        .decode_without_bom_handling_and_without_replacement(&column_bytes[..end])
-        .ok_or_else(|| {
-            DtaError::io(
-                Section::Records,
-                std::io::Error::other("invalid string encoding in record"),
-            )
-        })?;
-    match decoded {
-        Cow::Borrowed(s) => Ok(Value::String(s)),
-        Cow::Owned(_) => Err(DtaError::io(
+    match decode_null_terminated(column_bytes, encoding) {
+        Some(Cow::Borrowed(s)) => Ok(Value::String(s)),
+        Some(Cow::Owned(_)) => Err(DtaError::io(
             Section::Records,
             std::io::Error::other(
                 "cannot return non-UTF-8 decoded string as a \
                  reference; use read_record() for non-UTF-8 files \
                  with non-ASCII strings",
             ),
+        )),
+        None => Err(DtaError::io(
+            Section::Records,
+            std::io::Error::other("invalid string encoding in record"),
         )),
     }
 }

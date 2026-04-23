@@ -9,8 +9,11 @@ repository = "https://github.com/almus-the-dan/dta"
 readme = "README.md"
 exclude = [
     "precommit-check.ps1",
+    "profile.sh",
+    "profile.ps1",
     ".github/",
     "plans/",
+    "benches/data/",
 ]
 keywords = ["stata", "data", "statistics", "data"]
 categories = ["parser-implementations", "encoding", "science"]
@@ -20,8 +23,21 @@ encoding_rs = "0.8.35"
 tokio = { version = "1", features = ["io-util", "fs"], optional = true }
 
 [dev-dependencies]
+clap = { version = "4", features = ["derive"] }
+criterion = { version = "0.8", features = ["html_reports"] }
+flate2 = "1"
 float-cmp = "0.10.0"
-tokio = { version = "1", features = ["macros", "rt"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt"] }
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+
+[[bench]]
+name = "roundtrip"
+harness = false
 
 [features]
 tokio = ["dep:tokio"]

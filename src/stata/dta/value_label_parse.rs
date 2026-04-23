@@ -36,12 +36,7 @@ pub(super) fn decode_label(
     encoding: &'static encoding_rs::Encoding,
 ) -> Result<String> {
     let bounded = &bytes[..bytes.len().min(max_len)];
-    let end = bounded
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(bounded.len());
-    encoding
-        .decode_without_bom_handling_and_without_replacement(&bounded[..end])
+    super::string_decoding::decode_null_terminated(bounded, encoding)
         .map(std::borrow::Cow::into_owned)
         .ok_or_else(|| {
             DtaError::io(
