@@ -1,3 +1,5 @@
+use super::long_string::LongString;
+
 /// A reference to a long string stored in the strL section of the file.
 ///
 /// In the data section, strL variables are encoded as a
@@ -39,5 +41,38 @@ impl LongStringRef {
     #[inline]
     pub fn observation(&self) -> u64 {
         self.observation
+    }
+}
+
+impl From<&LongString<'_>> for LongStringRef {
+    #[inline]
+    fn from(long_string: &LongString<'_>) -> Self {
+        Self::new(long_string.variable(), long_string.observation())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use encoding_rs::UTF_8;
+
+    use super::*;
+
+    #[test]
+    fn from_long_string_copies_variable_and_observation() {
+        let long_string = LongString::new(7, 42, false, Cow::Borrowed(b"hello"), UTF_8);
+        let long_string_ref = LongStringRef::from(&long_string);
+        assert_eq!(long_string_ref.variable(), 7);
+        assert_eq!(long_string_ref.observation(), 42);
+    }
+
+    #[test]
+    fn from_long_string_is_non_consuming() {
+        let long_string = LongString::new(1, 2, false, Cow::Borrowed(b"data"), UTF_8);
+        let _ref_a = LongStringRef::from(&long_string);
+        // Still usable because `From<&LongString<'_>>` borrows.
+        let _ref_b = LongStringRef::from(&long_string);
+        assert_eq!(long_string.data(), b"data");
     }
 }
