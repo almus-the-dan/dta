@@ -15,27 +15,15 @@ use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 ///
 /// Callers shape the error type they need: this helper just answers
 /// "here are the decoded characters up to the first null, or `None`
-/// if the bytes are not valid in the encoding". Use [`find_null`] +
-/// [`Cow::into_owned`] at the call site when an owned string is
-/// required.
-///
-/// # UTF-8 fast path
-///
-/// When `encoding` is UTF-8 we bypass encoding_rs's dispatch and
-/// validate directly with [`std::str::from_utf8`]. This is the
-/// common modern case (V118+ files) and lets the callers avoid the
-/// extra indirection through encoding_rs's generic decode path.
+/// if the bytes are not valid in the encoding". Use [`Cow::into_owned`]
+/// at the call site when an owned string is required.
 #[inline]
 pub(super) fn decode_null_terminated<'a>(
     buffer: &'a [u8],
     encoding: &'static Encoding,
 ) -> Option<Cow<'a, str>> {
     let end = find_null(buffer);
-    let bytes = &buffer[..end];
-    if encoding == encoding_rs::UTF_8 {
-        return std::str::from_utf8(bytes).ok().map(Cow::Borrowed);
-    }
-    encoding.decode_without_bom_handling_and_without_replacement(bytes)
+    encoding.decode_without_bom_handling_and_without_replacement(&buffer[..end])
 }
 
 /// Decodes a null-terminated fixed-width string buffer using the
