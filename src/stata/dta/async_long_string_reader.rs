@@ -11,6 +11,7 @@ use super::long_string::LongString;
 use super::long_string_parse::{
     GSO_SECTION_CLOSE_REST, GsoHeader, GsoTag, classify_gso_tag, long_string_data_len_to_usize,
 };
+use super::long_string_table::LongStringTable;
 use super::schema::Schema;
 
 /// Reads long string (strL) entries from a DTA file asynchronously.
@@ -87,6 +88,41 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             encoding,
         );
         Ok(Some(long_string))
+    }
+
+    /// Reads all remaining long-string entries into `table`, keyed by
+    /// their on-disk `(variable, observation)` pairs.
+    ///
+    /// Each entry is inserted via
+    /// [`LongStringTable::get_or_insert_by_key`], preserving the
+    /// file's keys so that [`LongStringRef`](super::long_string_ref::LongStringRef)s
+    /// from the data section resolve via
+    /// [`LongStringTable::get`]. The reader's internal buffer is
+    /// copied into the table, so callers are free to drop the reader
+    /// afterward.
+    ///
+    /// This method drains the reader to completion — after it
+    /// returns, `self` is ready for
+    /// [`into_value_label_reader`](Self::into_value_label_reader).
+    ///
+    /// For pre-117 files, which have no strL section, the call is a
+    /// no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] when the entry bytes violate the DTA
+    /// format specification.
+    pub async fn read_remaining_into(&mut self, table: &mut LongStringTable) -> Result<()> {
+        while let Some(long_string) = self.read_long_string().await? {
+            table.get_or_insert_by_key(
+                long_string.variable(),
+                long_string.observation(),
+                long_string.data(),
+                long_string.is_binary(),
+            );
+        }
+        Ok(())
     }
 
     /// Skips all remaining long-string entries without processing
@@ -318,6 +354,93 @@ mod tests {
         .await;
         assert_eq!(observation, 5_000_000_000);
         assert_eq!(data, b"wide");
+    }
+
+    async fn build_bytes_with_entries(release: Release, entries: &[LongString<'_>]) -> Vec<u8> {
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = Header::builder(release, ByteOrder::LittleEndian).build();
+        let mut long_string_writer = DtaWriter::new()
+            .from_tokio_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .await
+            .unwrap()
+            .write_schema(schema)
+            .await
+            .unwrap()
+            .into_record_writer()
+            .await
+            .unwrap()
+            .into_long_string_writer()
+            .await
+            .unwrap();
+        for entry in entries {
+            long_string_writer.write_long_string(entry).await.unwrap();
+        }
+        let cursor: Cursor<Vec<u8>> = long_string_writer
+            .into_value_label_writer()
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
+        cursor.into_inner()
+    }
+
+    async fn reader_for(bytes: &[u8]) -> AsyncLongStringReader<impl AsyncRead + Unpin + '_> {
+        DtaReader::new()
+            .from_tokio_reader(bytes)
+            .read_header()
+            .await
+            .unwrap()
+            .read_schema()
+            .await
+            .unwrap()
+            .into_record_reader()
+            .await
+            .unwrap()
+            .into_long_string_reader()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_remaining_into_populates_table() {
+        use crate::stata::dta::long_string_ref::LongStringRef;
+        use crate::stata::dta::long_string_table::LongStringTable;
+
+        let bytes = build_bytes_with_entries(
+            Release::V117,
+            &[text(1, 1, "alpha"), text(1, 2, "beta"), text(2, 1, "gamma")],
+        )
+        .await;
+        let mut reader = reader_for(&bytes).await;
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).await.unwrap();
+        assert_eq!(table.len(), 3);
+        assert_eq!(
+            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            b"alpha"
+        );
+        assert_eq!(
+            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            b"gamma"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_remaining_into_is_noop_on_pre_117_file() {
+        use crate::stata::dta::long_string_table::LongStringTable;
+
+        let bytes = build_bytes_with_entries(Release::V114, &[]).await;
+        let mut reader = reader_for(&bytes).await;
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).await.unwrap();
+        assert!(table.is_empty());
     }
 
     #[tokio::test]

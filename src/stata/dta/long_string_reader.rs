@@ -9,6 +9,7 @@ use super::long_string::LongString;
 use super::long_string_parse::{
     GSO_SECTION_CLOSE_REST, GsoHeader, GsoTag, classify_gso_tag, long_string_data_len_to_usize,
 };
+use super::long_string_table::LongStringTable;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
 use super::schema::Schema;
@@ -91,6 +92,41 @@ impl<R: BufRead> LongStringReader<R> {
             encoding,
         );
         Ok(Some(long_string))
+    }
+
+    /// Reads all remaining long-string entries into `table`, keyed by
+    /// their on-disk `(variable, observation)` pairs.
+    ///
+    /// Each entry is inserted via
+    /// [`LongStringTable::get_or_insert_by_key`], preserving the
+    /// file's keys so that [`LongStringRef`](super::long_string_ref::LongStringRef)s
+    /// from the data section resolve via
+    /// [`LongStringTable::get`]. The reader's internal buffer is
+    /// copied into the table, so callers are free to drop the reader
+    /// afterward.
+    ///
+    /// This method drains the reader to completion — after it
+    /// returns, `self` is ready for
+    /// [`into_value_label_reader`](Self::into_value_label_reader).
+    ///
+    /// For pre-117 files, which have no strL section, the call is a
+    /// no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] when the entry bytes violate the DTA
+    /// format specification.
+    pub fn read_remaining_into(&mut self, table: &mut LongStringTable) -> Result<()> {
+        while let Some(long_string) = self.read_long_string()? {
+            table.get_or_insert_by_key(
+                long_string.variable(),
+                long_string.observation(),
+                long_string.data(),
+                long_string.is_binary(),
+            );
+        }
+        Ok(())
     }
 
     /// Skips all remaining long-string entries without processing
@@ -294,5 +330,179 @@ impl<R: BufRead + Seek> LongStringReader<R> {
         }
         let reader = Self::new(self.state, self.header, self.schema);
         Ok(reader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use encoding_rs::UTF_8;
+
+    use super::*;
+    use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::dta_reader::DtaReader;
+    use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::long_string_ref::LongStringRef;
+    use crate::stata::dta::release::Release;
+    use crate::stata::dta::variable::Variable;
+    use crate::stata::dta::variable_type::VariableType;
+
+    fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
+        LongString::new(
+            variable,
+            observation,
+            false,
+            Cow::Borrowed(data.as_bytes()),
+            UTF_8,
+        )
+    }
+
+    fn build_file_with_long_strings(release: Release, entries: &[LongString<'_>]) -> Vec<u8> {
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = Header::builder(release, ByteOrder::LittleEndian).build();
+        let mut long_string_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap()
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap();
+        for entry in entries {
+            long_string_writer.write_long_string(entry).unwrap();
+        }
+        long_string_writer
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner()
+    }
+
+    fn long_string_reader_for(bytes: Vec<u8>) -> LongStringReader<Cursor<Vec<u8>>> {
+        let mut characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        characteristic_reader.skip_to_end().unwrap();
+        let mut record_reader = characteristic_reader.into_record_reader().unwrap();
+        record_reader.skip_to_end().unwrap();
+        record_reader.into_long_string_reader().unwrap()
+    }
+
+    #[test]
+    fn read_remaining_into_populates_table() {
+        let bytes = build_file_with_long_strings(
+            Release::V117,
+            &[text(1, 1, "alpha"), text(1, 2, "beta"), text(2, 1, "gamma")],
+        );
+        let mut reader = long_string_reader_for(bytes);
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+
+        assert_eq!(table.len(), 3);
+        assert_eq!(
+            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            b"alpha"
+        );
+        assert_eq!(
+            table.get(&LongStringRef::new(1, 2), UTF_8).unwrap().data(),
+            b"beta"
+        );
+        assert_eq!(
+            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            b"gamma"
+        );
+    }
+
+    #[test]
+    fn read_remaining_into_preserves_wide_v118_observations() {
+        let bytes =
+            build_file_with_long_strings(Release::V118, &[text(1, 5_000_000_000, "wide obs")]);
+        let mut reader = long_string_reader_for(bytes);
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+
+        let reference = LongStringRef::new(1, 5_000_000_000);
+        assert_eq!(table.get(&reference, UTF_8).unwrap().data(), b"wide obs");
+    }
+
+    #[test]
+    fn read_remaining_into_is_noop_on_pre_117_file() {
+        let bytes = build_file_with_long_strings(Release::V114, &[]);
+        let mut reader = long_string_reader_for(bytes);
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn read_remaining_into_after_partial_consumption() {
+        let bytes = build_file_with_long_strings(
+            Release::V117,
+            &[text(1, 1, "alpha"), text(1, 2, "beta"), text(2, 1, "gamma")],
+        );
+        let mut reader = long_string_reader_for(bytes);
+
+        // Consume the first entry manually to prove read_remaining_into
+        // picks up from wherever the reader currently is.
+        let first = reader.read_long_string().unwrap().unwrap();
+        assert_eq!(first.data(), b"alpha");
+        drop(first);
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(table.get(&LongStringRef::new(1, 1), UTF_8).is_none());
+        assert_eq!(
+            table.get(&LongStringRef::new(1, 2), UTF_8).unwrap().data(),
+            b"beta"
+        );
+        assert_eq!(
+            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            b"gamma"
+        );
+    }
+
+    #[test]
+    fn read_remaining_into_allows_transition_to_value_label_reader() {
+        let bytes = build_file_with_long_strings(Release::V117, &[text(1, 1, "one")]);
+        let mut reader = long_string_reader_for(bytes);
+
+        let mut table = LongStringTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+        // Drained reader must be able to transition to the next phase.
+        let _value_label_reader = reader.into_value_label_reader().unwrap();
+    }
+
+    #[test]
+    fn read_remaining_into_appends_to_non_empty_table() {
+        let bytes = build_file_with_long_strings(Release::V117, &[text(2, 2, "from file")]);
+        let mut reader = long_string_reader_for(bytes);
+
+        let mut table = LongStringTable::new();
+        table.get_or_insert_by_content(1, 1, b"pre-existing", false);
+
+        reader.read_remaining_into(&mut table).unwrap();
+        assert_eq!(table.len(), 2);
+        assert_eq!(
+            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            b"pre-existing"
+        );
+        assert_eq!(
+            table.get(&LongStringRef::new(2, 2), UTF_8).unwrap().data(),
+            b"from file"
+        );
     }
 }

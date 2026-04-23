@@ -614,8 +614,8 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::new();
-        let ref1 = table.get_or_insert(1, 1, b"hello", false);
-        let ref2 = table.get_or_insert(1, 2, b"world", false);
+        let ref1 = table.get_or_insert_by_content(1, 1, b"hello", false);
+        let ref2 = table.get_or_insert_by_content(1, 2, b"world", false);
 
         let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, schema, |writer| {
             writer.write_record(&[Value::LongStringRef(ref1)]).unwrap();
@@ -636,7 +636,7 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::new();
-        let reference = table.get_or_insert(1, 42, b"hello", false);
+        let reference = table.get_or_insert_by_content(1, 42, b"hello", false);
 
         let bytes = round_trip(Release::V118, ByteOrder::LittleEndian, schema, |writer| {
             writer
@@ -654,7 +654,7 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::new();
-        let reference = table.get_or_insert(3, 5, b"payload", false);
+        let reference = table.get_or_insert_by_content(3, 5, b"payload", false);
 
         let bytes = round_trip(Release::V118, ByteOrder::BigEndian, schema, |writer| {
             writer

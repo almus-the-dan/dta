@@ -395,11 +395,11 @@ mod tests {
     #[test]
     fn write_long_string_table_round_trip() {
         let mut table = LongStringTable::new();
-        table.get_or_insert(1, 1, b"apple", false);
-        table.get_or_insert(1, 2, b"banana", false);
-        table.get_or_insert(2, 1, b"carrot", false);
+        table.get_or_insert_by_content(1, 1, b"apple", false);
+        table.get_or_insert_by_content(1, 2, b"banana", false);
+        table.get_or_insert_by_content(2, 1, b"carrot", false);
         // Duplicate payload must not produce a second entry.
-        let duplicate_ref = table.get_or_insert(99, 99, b"apple", false);
+        let duplicate_ref = table.get_or_insert_by_content(99, 99, b"apple", false);
         assert_eq!(duplicate_ref.variable(), 1);
         assert_eq!(duplicate_ref.observation(), 1);
         assert_eq!(table.len(), 3);
@@ -476,7 +476,7 @@ mod tests {
     fn pre_v117_rejects_write_long_string_table_with_entries() {
         let mut writer = v114_long_string_writer();
         let mut table = LongStringTable::new();
-        table.get_or_insert(1, 1, b"x", false);
+        table.get_or_insert_by_content(1, 1, b"x", false);
         let error = writer.write_long_string_table(&table).unwrap_err();
         assert!(matches!(
             error,

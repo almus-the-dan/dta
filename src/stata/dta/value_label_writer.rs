@@ -652,7 +652,7 @@ mod tests {
         let header = Header::builder(release, byte_order).build();
 
         let mut long_strings = LongStringTable::new();
-        let ls_ref = long_strings.get_or_insert(2, 1, b"hello strL", false);
+        let ls_ref = long_strings.get_or_insert_by_content(2, 1, b"hello strL", false);
 
         let value_label_table =
             ValueLabelTable::new("lbl".to_owned(), entries(&[(0, "zero"), (1, "one")]));
