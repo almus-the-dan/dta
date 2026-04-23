@@ -56,9 +56,9 @@ pub enum Field {
     VariableLabel,
     /// A variable display format string.
     VariableFormat,
-    /// A value-label table name.
+    /// A value-label set name.
     ValueLabelName,
-    /// An entry inside a value-label table.
+    /// An entry inside a value-label set.
     ValueLabelEntry,
     /// The type field of a long string (strL) entry.
     LongStringType,
@@ -211,8 +211,8 @@ pub enum FormatErrorKind {
         /// The tag that was found.
         actual: Tag,
     },
-    /// A value-label table's internal offsets are inconsistent.
-    InvalidValueLabelTable,
+    /// A value-label set's internal offsets are inconsistent.
+    InvalidValueLabelSet,
     /// A strL entry header is malformed.
     InvalidLongStringEntry,
     /// A value is too large for the field that would store it
@@ -308,9 +308,7 @@ impl fmt::Display for FormatErrorKind {
             Self::UnexpectedTag { expected, actual } => {
                 write!(f, "expected <{expected}> tag, found <{actual}>")
             }
-            Self::InvalidValueLabelTable => {
-                f.write_str("value-label table has inconsistent offsets")
-            }
+            Self::InvalidValueLabelSet => f.write_str("value-label set has inconsistent offsets"),
             Self::InvalidLongStringEntry => f.write_str("malformed strL entry header"),
             Self::FieldTooLarge { field, max, actual } => write!(
                 f,

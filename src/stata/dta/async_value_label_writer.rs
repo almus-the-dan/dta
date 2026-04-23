@@ -4,17 +4,18 @@ use super::async_writer_state::AsyncWriterState;
 use super::dta_error::{DtaError, Field, Result, Section};
 use super::header::Header;
 use super::schema::Schema;
-use super::value_label::ValueLabelTable;
+use super::value_label::ValueLabelSet;
 use super::value_label_format::{
     build_modern_text_payload, build_old_slot_table, modern_payload_bytes,
     narrow_entry_count_to_u32, narrow_slot_count_to_table_len,
 };
+use super::value_label_table::ValueLabelTable;
 
-/// Writes value-label tables asynchronously — the last section of a
+/// Writes value-label sets asynchronously — the last section of a
 /// DTA file.
 ///
-/// Call [`write_value_label_table`](Self::write_value_label_table)
-/// once per table, then [`finish`](Self::finish) to close the section
+/// Call [`write_value_label_set`](Self::write_value_label_set)
+/// once per set, then [`finish`](Self::finish) to close the section
 /// (XML formats only), flush the sink, and recover the underlying
 /// writer.
 #[derive(Debug)]
@@ -55,26 +56,45 @@ impl<W> AsyncValueLabelWriter<W> {
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
-    /// Writes a single value-label table.
+    /// Writes a single value-label set.
     ///
     /// Can be called any number of times (including zero).
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format) if the table
+    /// Returns [`DtaError::Format`](DtaError::Format) if the set
     /// cannot be represented — a name or label exceeding its field
     /// width, a value outside the range supported by the release's
     /// layout, or text that cannot be encoded in the active encoding.
     /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
-    pub async fn write_value_label_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    pub async fn write_value_label_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         if self.header.release().is_xml_like() {
             self.open_section_if_needed().await?;
         }
         if self.header.release().has_old_value_labels() {
-            self.write_old_table(table).await
+            self.write_old_set(set).await
         } else {
-            self.write_modern_table(table).await
+            self.write_modern_set(set).await
         }
+    }
+
+    /// Writes every set in `table` via
+    /// [`write_value_label_set`](Self::write_value_label_set).
+    ///
+    /// An empty table is a no-op. Iteration order is not stable
+    /// (the underlying map is a [`HashMap`](std::collections::HashMap)),
+    /// but value-label sets in a DTA file are independent of each
+    /// other, so order does not affect round-trips.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces the first error from
+    /// [`write_value_label_set`](Self::write_value_label_set).
+    pub async fn write_value_label_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+        for set in table.iter() {
+            self.write_value_label_set(set).await?;
+        }
+        Ok(())
     }
 
     /// Closes the value-labels section (XML only), emits the final
@@ -132,21 +152,21 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
-    /// Writes one table in the V104 legacy layout.
-    async fn write_old_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    /// Writes one set in the V104 legacy layout.
+    async fn write_old_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
 
-        let slots = build_old_slot_table(table, self.state.encoding(), position_before)?;
-        let table_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
+        let slots = build_old_slot_table(set, self.state.encoding(), position_before)?;
+        let set_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
 
         self.state
-            .write_u16(table_len_u16, byte_order, Section::ValueLabels)
+            .write_u16(set_len_u16, byte_order, Section::ValueLabels)
             .await?;
         self.state
             .write_fixed_string(
-                table.name(),
+                set.name(),
                 release.value_label_name_len(),
                 Section::ValueLabels,
                 Field::ValueLabelName,
@@ -170,12 +190,12 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
         Ok(())
     }
 
-    /// Writes one table in the modern (V105+) layout.
-    async fn write_modern_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    /// Writes one set in the modern (V105+) layout.
+    async fn write_modern_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
-        let entries = table.entries();
+        let entries = set.entries();
 
         let (encoded_labels, offsets, text_len) =
             build_modern_text_payload(entries, self.state.encoding(), position_before)?;
@@ -193,7 +213,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
             .await?;
         self.state
             .write_fixed_string(
-                table.name(),
+                set.name(),
                 release.value_label_name_len(),
                 Section::ValueLabels,
                 Field::ValueLabelName,
@@ -271,7 +291,7 @@ mod tests {
         release: Release,
         byte_order: ByteOrder,
         write_fn: F,
-    ) -> Vec<ValueLabelTable>
+    ) -> Vec<ValueLabelSet>
     where
         F: FnOnce(AsyncValueLabelWriter<Cursor<Vec<u8>>>) -> Fut,
         Fut: std::future::Future<Output = AsyncValueLabelWriter<Cursor<Vec<u8>>>>,
@@ -319,139 +339,182 @@ mod tests {
             .into_value_label_reader()
             .await
             .unwrap();
-        let mut tables = Vec::new();
-        while let Some(table) = reader.read_value_label_table().await.unwrap() {
-            tables.push(table);
+        let mut sets = Vec::new();
+        while let Some(set) = reader.read_value_label_set().await.unwrap() {
+            sets.push(set);
         }
-        tables
+        sets
     }
 
     // -- Modern-layout round-trips (V105+) ----------------------------------
 
     #[tokio::test]
-    async fn binary_v114_single_table_round_trip() {
-        let table = ValueLabelTable::new(
+    async fn binary_v114_single_set_round_trip() {
+        let set = ValueLabelSet::new(
             "pricelbl".to_owned(),
             entries(&[(0, "cheap"), (1, "pricey")]),
         );
-        let tables = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
-            w.write_value_label_table(&table).await.unwrap();
+        let sets = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
+            w.write_value_label_set(&set).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "pricelbl");
-        assert_eq!(tables[0].entries().len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 0);
-        assert_eq!(tables[0].entries()[0].label(), "cheap");
-        assert_eq!(tables[0].entries()[1].value(), 1);
-        assert_eq!(tables[0].entries()[1].label(), "pricey");
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].name(), "pricelbl");
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 0);
+        assert_eq!(sets[0].entries()[0].label(), "cheap");
+        assert_eq!(sets[0].entries()[1].value(), 1);
+        assert_eq!(sets[0].entries()[1].label(), "pricey");
     }
 
     #[tokio::test]
-    async fn binary_v114_multiple_tables_round_trip() {
-        let tables = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
-            let t1 = ValueLabelTable::new("a".to_owned(), entries(&[(0, "zero"), (1, "one")]));
-            let t2 = ValueLabelTable::new("b".to_owned(), entries(&[(-1, "neg")]));
-            w.write_value_label_table(&t1).await.unwrap();
-            w.write_value_label_table(&t2).await.unwrap();
+    async fn binary_v114_multiple_sets_round_trip() {
+        let sets = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
+            let set1 = ValueLabelSet::new("a".to_owned(), entries(&[(0, "zero"), (1, "one")]));
+            let set2 = ValueLabelSet::new("b".to_owned(), entries(&[(-1, "neg")]));
+            w.write_value_label_set(&set1).await.unwrap();
+            w.write_value_label_set(&set2).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0].name(), "a");
-        assert_eq!(tables[1].name(), "b");
-        assert_eq!(tables[1].entries()[0].value(), -1);
-        assert_eq!(tables[1].entries()[0].label(), "neg");
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].name(), "a");
+        assert_eq!(sets[1].name(), "b");
+        assert_eq!(sets[1].entries()[0].value(), -1);
+        assert_eq!(sets[1].entries()[0].label(), "neg");
     }
 
     #[tokio::test]
-    async fn binary_v114_empty_table_round_trip() {
-        let table = ValueLabelTable::new("empty".to_owned(), Vec::new());
-        let tables = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
-            w.write_value_label_table(&table).await.unwrap();
+    async fn binary_v114_empty_set_round_trip() {
+        let set = ValueLabelSet::new("empty".to_owned(), Vec::new());
+        let sets = round_trip(Release::V114, ByteOrder::LittleEndian, |mut w| async move {
+            w.write_value_label_set(&set).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "empty");
-        assert!(tables[0].entries().is_empty());
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].name(), "empty");
+        assert!(sets[0].entries().is_empty());
     }
 
     #[tokio::test]
     async fn binary_v114_big_endian_round_trip() {
-        let table = ValueLabelTable::new("be".to_owned(), entries(&[(10, "ten"), (20, "twenty")]));
-        let tables = round_trip(Release::V114, ByteOrder::BigEndian, |mut w| async move {
-            w.write_value_label_table(&table).await.unwrap();
+        let set = ValueLabelSet::new("be".to_owned(), entries(&[(10, "ten"), (20, "twenty")]));
+        let sets = round_trip(Release::V114, ByteOrder::BigEndian, |mut w| async move {
+            w.write_value_label_set(&set).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables[0].entries()[0].value(), 10);
-        assert_eq!(tables[0].entries()[1].value(), 20);
+        assert_eq!(sets[0].entries()[0].value(), 10);
+        assert_eq!(sets[0].entries()[1].value(), 20);
     }
 
     #[tokio::test]
-    async fn binary_v114_no_tables_round_trip() {
-        let tables = round_trip(Release::V114, ByteOrder::LittleEndian, |w| async move { w }).await;
-        assert!(tables.is_empty());
+    async fn binary_v114_no_sets_round_trip() {
+        let sets = round_trip(Release::V114, ByteOrder::LittleEndian, |w| async move { w }).await;
+        assert!(sets.is_empty());
     }
 
     // -- XML round-trips ----------------------------------------------------
 
     #[tokio::test]
     async fn xml_v117_round_trip() {
-        let tables = round_trip(Release::V117, ByteOrder::LittleEndian, |mut w| async move {
-            let t1 =
-                ValueLabelTable::new("pricelbl".to_owned(), entries(&[(1, "low"), (5, "high")]));
-            let t2 = ValueLabelTable::new("empty".to_owned(), Vec::new());
-            w.write_value_label_table(&t1).await.unwrap();
-            w.write_value_label_table(&t2).await.unwrap();
+        let sets = round_trip(Release::V117, ByteOrder::LittleEndian, |mut w| async move {
+            let set1 =
+                ValueLabelSet::new("pricelbl".to_owned(), entries(&[(1, "low"), (5, "high")]));
+            let set2 = ValueLabelSet::new("empty".to_owned(), Vec::new());
+            w.write_value_label_set(&set1).await.unwrap();
+            w.write_value_label_set(&set2).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 1);
-        assert_eq!(tables[0].entries()[1].value(), 5);
-        assert_eq!(tables[0].entries()[1].label(), "high");
-        assert_eq!(tables[1].name(), "empty");
-        assert!(tables[1].entries().is_empty());
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 1);
+        assert_eq!(sets[0].entries()[1].value(), 5);
+        assert_eq!(sets[0].entries()[1].label(), "high");
+        assert_eq!(sets[1].name(), "empty");
+        assert!(sets[1].entries().is_empty());
     }
 
     #[tokio::test]
-    async fn xml_v117_no_tables_round_trip() {
-        let tables = round_trip(Release::V117, ByteOrder::LittleEndian, |w| async move { w }).await;
-        assert!(tables.is_empty());
+    async fn xml_v117_no_sets_round_trip() {
+        let sets = round_trip(Release::V117, ByteOrder::LittleEndian, |w| async move { w }).await;
+        assert!(sets.is_empty());
     }
 
+    // -- write_value_label_table --------------------------------------------
+
     #[tokio::test]
-    async fn xml_v118_utf8_label_round_trip() {
-        let tables = round_trip(Release::V118, ByteOrder::LittleEndian, |mut w| async move {
-            let table =
-                ValueLabelTable::new("lang".to_owned(), entries(&[(1, "日本語"), (2, "español")]));
+    async fn write_value_label_table_round_trip() {
+        use crate::stata::dta::value_label_table::ValueLabelTable;
+
+        let mut table = ValueLabelTable::new();
+        table.insert(ValueLabelSet::new(
+            "pricelbl".to_owned(),
+            entries(&[(0, "cheap"), (1, "pricey")]),
+        ));
+        table.insert(ValueLabelSet::new(
+            "ratinglbl".to_owned(),
+            entries(&[(1, "low"), (5, "high")]),
+        ));
+
+        let mut sets = round_trip(Release::V117, ByteOrder::LittleEndian, |mut w| async move {
             w.write_value_label_table(&table).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables[0].entries()[0].label(), "日本語");
-        assert_eq!(tables[0].entries()[1].label(), "español");
+        sets.sort_by(|a, b| a.name().cmp(b.name()));
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].name(), "pricelbl");
+        assert_eq!(sets[0].label_for(0), Some("cheap"));
+        assert_eq!(sets[1].name(), "ratinglbl");
+        assert_eq!(sets[1].label_for(5), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn write_value_label_table_empty_round_trip() {
+        use crate::stata::dta::value_label_table::ValueLabelTable;
+
+        let sets = round_trip(Release::V117, ByteOrder::LittleEndian, |mut w| async move {
+            w.write_value_label_table(&ValueLabelTable::new())
+                .await
+                .unwrap();
+            w
+        })
+        .await;
+        assert!(sets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn xml_v118_utf8_label_round_trip() {
+        let sets = round_trip(Release::V118, ByteOrder::LittleEndian, |mut w| async move {
+            let set =
+                ValueLabelSet::new("lang".to_owned(), entries(&[(1, "日本語"), (2, "español")]));
+            w.write_value_label_set(&set).await.unwrap();
+            w
+        })
+        .await;
+        assert_eq!(sets[0].entries()[0].label(), "日本語");
+        assert_eq!(sets[0].entries()[1].label(), "español");
     }
 
     // -- V104 legacy layout -------------------------------------------------
 
     #[tokio::test]
-    async fn v104_single_table_round_trip() {
-        let tables = round_trip(Release::V104, ByteOrder::LittleEndian, |mut w| async move {
-            let table = ValueLabelTable::new("old".to_owned(), entries(&[(0, "zero"), (2, "two")]));
-            w.write_value_label_table(&table).await.unwrap();
+    async fn v104_single_set_round_trip() {
+        let sets = round_trip(Release::V104, ByteOrder::LittleEndian, |mut w| async move {
+            let set = ValueLabelSet::new("old".to_owned(), entries(&[(0, "zero"), (2, "two")]));
+            w.write_value_label_set(&set).await.unwrap();
             w
         })
         .await;
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].entries().len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 0);
-        assert_eq!(tables[0].entries()[0].label(), "zero");
-        assert_eq!(tables[0].entries()[1].value(), 2);
-        assert_eq!(tables[0].entries()[1].label(), "two");
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 0);
+        assert_eq!(sets[0].entries()[0].label(), "zero");
+        assert_eq!(sets[0].entries()[1].value(), 2);
+        assert_eq!(sets[0].entries()[1].label(), "two");
     }
 
     async fn v104_value_label_writer() -> AsyncValueLabelWriter<Cursor<Vec<u8>>> {
@@ -481,9 +544,9 @@ mod tests {
 
     #[tokio::test]
     async fn v104_rejects_negative_value() {
-        let table = ValueLabelTable::new("neg".to_owned(), entries(&[(-1, "nope")]));
+        let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "nope")]));
         let mut writer = v104_value_label_writer().await;
-        let error = writer.write_value_label_table(&table).await.unwrap_err();
+        let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -495,9 +558,9 @@ mod tests {
 
     #[tokio::test]
     async fn v104_rejects_duplicate_value() {
-        let table = ValueLabelTable::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
+        let set = ValueLabelSet::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
         let mut writer = v104_value_label_writer().await;
-        let error = writer.write_value_label_table(&table).await.unwrap_err();
+        let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -509,9 +572,9 @@ mod tests {
 
     #[tokio::test]
     async fn label_too_long_in_v104_errors() {
-        let table = ValueLabelTable::new("long".to_owned(), entries(&[(0, "nine char")]));
+        let set = ValueLabelSet::new("long".to_owned(), entries(&[(0, "nine char")]));
         let mut writer = v104_value_label_writer().await;
-        let error = writer.write_value_label_table(&table).await.unwrap_err();
+        let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -547,11 +610,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn table_name_too_long_errors() {
+    async fn set_name_too_long_errors() {
         let long_name = "n".repeat(50);
-        let table = ValueLabelTable::new(long_name, Vec::new());
+        let set = ValueLabelSet::new(long_name, Vec::new());
         let mut writer = v114_value_label_writer().await;
-        let error = writer.write_value_label_table(&table).await.unwrap_err();
+        let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -563,9 +626,9 @@ mod tests {
 
     #[tokio::test]
     async fn non_latin_label_in_windows_1252_errors() {
-        let table = ValueLabelTable::new("lang".to_owned(), entries(&[(1, "日")]));
+        let set = ValueLabelSet::new("lang".to_owned(), entries(&[(1, "日")]));
         let mut writer = v114_value_label_writer().await;
-        let error = writer.write_value_label_table(&table).await.unwrap_err();
+        let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(

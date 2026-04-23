@@ -3,17 +3,18 @@ use std::io::{Seek, Write};
 use super::dta_error::{DtaError, Field, Result, Section};
 use super::header::Header;
 use super::schema::Schema;
-use super::value_label::ValueLabelTable;
+use super::value_label::ValueLabelSet;
 use super::value_label_format::{
     build_modern_text_payload, build_old_slot_table, modern_payload_bytes,
     narrow_entry_count_to_u32, narrow_slot_count_to_table_len,
 };
+use super::value_label_table::ValueLabelTable;
 use super::writer_state::WriterState;
 
-/// Writes value-label tables — the last section of a DTA file.
+/// Writes value-label sets — the last section of a DTA file.
 ///
-/// Call [`write_value_label_table`](Self::write_value_label_table)
-/// once per table, then [`finish`](Self::finish) to close the
+/// Call [`write_value_label_set`](Self::write_value_label_set)
+/// once per set, then [`finish`](Self::finish) to close the
 /// section (XML formats only), flush the sink, and recover the
 /// underlying writer.
 #[derive(Debug)]
@@ -54,27 +55,46 @@ impl<W> ValueLabelWriter<W> {
 }
 
 impl<W: Write + Seek> ValueLabelWriter<W> {
-    /// Writes a single value-label table.
+    /// Writes a single value-label set.
     ///
     /// Can be called any number of times (including zero).
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format) if the table
+    /// Returns [`DtaError::Format`](DtaError::Format) if the set
     /// cannot be represented — a name or label exceeding its field
     /// width, a value outside the range supported by the release's
     /// layout, or text that cannot be encoded in the active
     /// encoding. Returns [`DtaError::Io`](DtaError::Io) on sink
     /// failures.
-    pub fn write_value_label_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    pub fn write_value_label_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         if self.header.release().is_xml_like() {
             self.open_section_if_needed()?;
         }
         if self.header.release().has_old_value_labels() {
-            self.write_old_table(table)
+            self.write_old_set(set)
         } else {
-            self.write_modern_table(table)
+            self.write_modern_set(set)
         }
+    }
+
+    /// Writes every set in `table` via
+    /// [`write_value_label_set`](Self::write_value_label_set).
+    ///
+    /// An empty table is a no-op. Iteration order is not stable
+    /// (the underlying map is a [`HashMap`](std::collections::HashMap)),
+    /// but value-label sets in a DTA file are independent of each
+    /// other, so order does not affect round-trips.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces the first error from
+    /// [`write_value_label_set`](Self::write_value_label_set).
+    pub fn write_value_label_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+        for set in table.iter() {
+            self.write_value_label_set(set)?;
+        }
+        Ok(())
     }
 
     /// Closes the value-labels section (XML only), emits the final
@@ -133,7 +153,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
 }
 
 impl<W: Write + Seek> ValueLabelWriter<W> {
-    /// Writes one table in the V104 legacy layout:
+    /// Writes one set in the V104 legacy layout:
     ///
     /// - `table_len`: `u16` = `slot_count * 8`
     /// - `name`: fixed-width + 2-byte padding
@@ -143,18 +163,18 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
     /// indicate no entry for that index. The caller's values must
     /// therefore be non-negative and ≤ `u16::MAX / 8` (= 8190);
     /// duplicate values are rejected.
-    fn write_old_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    fn write_old_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
 
-        let slots = build_old_slot_table(table, self.state.encoding(), position_before)?;
-        let table_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
+        let slots = build_old_slot_table(set, self.state.encoding(), position_before)?;
+        let set_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
 
         self.state
-            .write_u16(table_len_u16, byte_order, Section::ValueLabels)?;
+            .write_u16(set_len_u16, byte_order, Section::ValueLabels)?;
         self.state.write_fixed_string(
-            table.name(),
+            set.name(),
             release.value_label_name_len(),
             Section::ValueLabels,
             Field::ValueLabelName,
@@ -174,7 +194,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
         Ok(())
     }
 
-    /// Writes one table in the modern (V105+) layout:
+    /// Writes one set in the modern (V105+) layout:
     ///
     /// - (XML only) `<lbl>`
     /// - `table_len`: `u32` — byte size of the payload that follows
@@ -187,29 +207,29 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
     ///   - `values`: `[i32; n]`
     ///   - `text`: `text_len` bytes of null-terminated labels
     /// - (XML only) `</lbl>`
-    fn write_modern_table(&mut self, table: &ValueLabelTable) -> Result<()> {
+    fn write_modern_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
-        let entries = table.entries();
+        let entries = set.entries();
 
         // Encode labels up front so we can validate and compute
         // offsets without emitting any bytes yet. `encoded_labels`
         // keeps each label as a `Cow` — borrowed directly from the
-        // caller's table on the pass-through encoding path.
+        // caller's set on the pass-through encoding path.
         let (encoded_labels, offsets, text_len) =
             build_modern_text_payload(entries, self.state.encoding(), position_before)?;
         let entry_count = narrow_entry_count_to_u32(entries.len(), position_before)?;
-        let table_len = modern_payload_bytes(entry_count, text_len, position_before)?;
+        let set_len = modern_payload_bytes(entry_count, text_len, position_before)?;
 
         if release.is_xml_like() {
             self.state.write_exact(b"<lbl>", Section::ValueLabels)?;
         }
 
         self.state
-            .write_u32(table_len, byte_order, Section::ValueLabels)?;
+            .write_u32(set_len, byte_order, Section::ValueLabels)?;
         self.state.write_fixed_string(
-            table.name(),
+            set.name(),
             release.value_label_name_len(),
             Section::ValueLabels,
             Field::ValueLabelName,
@@ -243,7 +263,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
         // Text area — each label followed by a null terminator.
         // Emitting per-label avoids concatenating every label into a
         // single buffer up front, so the borrowed branch of each
-        // `Cow` stays a pointer into the caller's `ValueLabelTable`.
+        // `Cow` stays a pointer into the caller's `ValueLabelSet`.
         for label in &encoded_labels {
             self.state.write_exact(label, Section::ValueLabels)?;
             self.state.write_u8(0, Section::ValueLabels)?;
@@ -279,7 +299,7 @@ mod tests {
 
     /// Runs the full writer pipeline end-to-end and returns the
     /// finalized file bytes. The caller emits zero or more value-label
-    /// tables; everything else uses a minimal schema with no rows.
+    /// sets; everything else uses a minimal schema with no rows.
     fn round_trip<F>(release: Release, byte_order: ByteOrder, write_fn: F) -> Vec<u8>
     where
         F: FnOnce(&mut ValueLabelWriter<Cursor<Vec<u8>>>) -> Result<()>,
@@ -302,8 +322,8 @@ mod tests {
         value_label_writer.finish().unwrap().into_inner()
     }
 
-    /// Reads back the full chain and collects every value-label table.
-    fn read_back(bytes: Vec<u8>) -> Vec<ValueLabelTable> {
+    /// Reads back the full chain and collects every value-label set.
+    fn read_back(bytes: Vec<u8>) -> Vec<ValueLabelSet> {
         let mut characteristic_reader = DtaReader::new()
             .from_reader(Cursor::new(bytes))
             .read_header()
@@ -320,11 +340,11 @@ mod tests {
         let mut long_string_reader = record_reader.into_long_string_reader().unwrap();
         while long_string_reader.read_long_string().unwrap().is_some() {}
         let mut value_label_reader = long_string_reader.into_value_label_reader().unwrap();
-        let mut tables = Vec::new();
-        while let Some(table) = value_label_reader.read_value_label_table().unwrap() {
-            tables.push(table);
+        let mut sets = Vec::new();
+        while let Some(set) = value_label_reader.read_value_label_set().unwrap() {
+            sets.push(set);
         }
-        tables
+        sets
     }
 
     fn entries(pairs: &[(i32, &str)]) -> Vec<ValueLabelEntry> {
@@ -337,146 +357,186 @@ mod tests {
     // -- Modern-layout round-trips (V105+) ----------------------------------
 
     #[test]
-    fn binary_v114_single_table_round_trip() {
-        let table = ValueLabelTable::new(
+    fn binary_v114_single_set_round_trip() {
+        let set = ValueLabelSet::new(
             "pricelbl".to_owned(),
             entries(&[(0, "cheap"), (1, "pricey")]),
         );
         let bytes = round_trip(Release::V114, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "pricelbl");
-        assert_eq!(tables[0].entries().len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 0);
-        assert_eq!(tables[0].entries()[0].label(), "cheap");
-        assert_eq!(tables[0].entries()[1].value(), 1);
-        assert_eq!(tables[0].entries()[1].label(), "pricey");
+        let sets = read_back(bytes);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].name(), "pricelbl");
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 0);
+        assert_eq!(sets[0].entries()[0].label(), "cheap");
+        assert_eq!(sets[0].entries()[1].value(), 1);
+        assert_eq!(sets[0].entries()[1].label(), "pricey");
     }
 
     #[test]
-    fn binary_v114_multiple_tables_round_trip() {
-        let t1 = ValueLabelTable::new("a".to_owned(), entries(&[(0, "zero"), (1, "one")]));
-        let t2 = ValueLabelTable::new("b".to_owned(), entries(&[(-1, "neg")]));
+    fn binary_v114_multiple_sets_round_trip() {
+        let set1 = ValueLabelSet::new("a".to_owned(), entries(&[(0, "zero"), (1, "one")]));
+        let set2 = ValueLabelSet::new("b".to_owned(), entries(&[(-1, "neg")]));
         let bytes = round_trip(Release::V114, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&t1)?;
-            writer.write_value_label_table(&t2)
+            writer.write_value_label_set(&set1)?;
+            writer.write_value_label_set(&set2)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0].name(), "a");
-        assert_eq!(tables[1].name(), "b");
-        assert_eq!(tables[1].entries()[0].value(), -1);
-        assert_eq!(tables[1].entries()[0].label(), "neg");
+        let sets = read_back(bytes);
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].name(), "a");
+        assert_eq!(sets[1].name(), "b");
+        assert_eq!(sets[1].entries()[0].value(), -1);
+        assert_eq!(sets[1].entries()[0].label(), "neg");
     }
 
     #[test]
-    fn binary_v114_empty_table_round_trip() {
-        let table = ValueLabelTable::new("empty".to_owned(), Vec::new());
+    fn binary_v114_empty_set_round_trip() {
+        let set = ValueLabelSet::new("empty".to_owned(), Vec::new());
         let bytes = round_trip(Release::V114, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0].name(), "empty");
-        assert!(tables[0].entries().is_empty());
+        let sets = read_back(bytes);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].name(), "empty");
+        assert!(sets[0].entries().is_empty());
     }
 
     #[test]
     fn binary_v114_big_endian_round_trip() {
-        let table = ValueLabelTable::new("be".to_owned(), entries(&[(10, "ten"), (20, "twenty")]));
+        let set = ValueLabelSet::new("be".to_owned(), entries(&[(10, "ten"), (20, "twenty")]));
         let bytes = round_trip(Release::V114, ByteOrder::BigEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables[0].entries()[0].value(), 10);
-        assert_eq!(tables[0].entries()[1].value(), 20);
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries()[0].value(), 10);
+        assert_eq!(sets[0].entries()[1].value(), 20);
     }
 
     #[test]
-    fn binary_v114_no_tables_round_trip() {
+    fn binary_v114_no_sets_round_trip() {
         let bytes = round_trip(Release::V114, ByteOrder::LittleEndian, |_| Ok(()));
-        let tables = read_back(bytes);
-        assert!(tables.is_empty());
+        let sets = read_back(bytes);
+        assert!(sets.is_empty());
     }
 
     // -- XML round-trips ----------------------------------------------------
 
     #[test]
     fn xml_v117_round_trip() {
-        let t1 = ValueLabelTable::new("pricelbl".to_owned(), entries(&[(1, "low"), (5, "high")]));
-        let t2 = ValueLabelTable::new("empty".to_owned(), Vec::new());
+        let set1 = ValueLabelSet::new("pricelbl".to_owned(), entries(&[(1, "low"), (5, "high")]));
+        let set2 = ValueLabelSet::new("empty".to_owned(), Vec::new());
         let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&t1)?;
-            writer.write_value_label_table(&t2)
+            writer.write_value_label_set(&set1)?;
+            writer.write_value_label_set(&set2)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 1);
-        assert_eq!(tables[0].entries()[1].value(), 5);
-        assert_eq!(tables[0].entries()[1].label(), "high");
-        assert_eq!(tables[1].name(), "empty");
-        assert!(tables[1].entries().is_empty());
+        let sets = read_back(bytes);
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 1);
+        assert_eq!(sets[0].entries()[1].value(), 5);
+        assert_eq!(sets[0].entries()[1].label(), "high");
+        assert_eq!(sets[1].name(), "empty");
+        assert!(sets[1].entries().is_empty());
     }
 
     #[test]
-    fn xml_v117_no_tables_round_trip() {
-        // Zero tables must still produce `<value_labels></value_labels>`
+    fn xml_v117_no_sets_round_trip() {
+        // Zero sets must still produce `<value_labels></value_labels>`
         // so the reader's expect_bytes succeeds.
         let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, |_| Ok(()));
-        let tables = read_back(bytes);
-        assert!(tables.is_empty());
+        let sets = read_back(bytes);
+        assert!(sets.is_empty());
+    }
+
+    // -- write_value_label_table --------------------------------------------
+
+    #[test]
+    fn write_value_label_table_round_trip() {
+        use crate::stata::dta::value_label_table::ValueLabelTable;
+
+        let mut table = ValueLabelTable::new();
+        table.insert(ValueLabelSet::new(
+            "pricelbl".to_owned(),
+            entries(&[(0, "cheap"), (1, "pricey")]),
+        ));
+        table.insert(ValueLabelSet::new(
+            "ratinglbl".to_owned(),
+            entries(&[(1, "low"), (5, "high")]),
+        ));
+
+        let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, |writer| {
+            writer.write_value_label_table(&table)
+        });
+        let mut sets = read_back(bytes);
+        // Iteration order is HashMap-defined, so sort for a stable assertion.
+        sets.sort_by(|a, b| a.name().cmp(b.name()));
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].name(), "pricelbl");
+        assert_eq!(sets[0].label_for(0), Some("cheap"));
+        assert_eq!(sets[1].name(), "ratinglbl");
+        assert_eq!(sets[1].label_for(5), Some("high"));
+    }
+
+    #[test]
+    fn write_value_label_table_empty_round_trip() {
+        use crate::stata::dta::value_label_table::ValueLabelTable;
+
+        let table = ValueLabelTable::new();
+        let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, |writer| {
+            writer.write_value_label_table(&table)
+        });
+        let sets = read_back(bytes);
+        assert!(sets.is_empty());
     }
 
     #[test]
     fn xml_v118_utf8_label_round_trip() {
-        let table =
-            ValueLabelTable::new("lang".to_owned(), entries(&[(1, "日本語"), (2, "español")]));
+        let set = ValueLabelSet::new("lang".to_owned(), entries(&[(1, "日本語"), (2, "español")]));
         let bytes = round_trip(Release::V118, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables[0].entries()[0].label(), "日本語");
-        assert_eq!(tables[0].entries()[1].label(), "español");
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries()[0].label(), "日本語");
+        assert_eq!(sets[0].entries()[1].label(), "español");
     }
 
     #[test]
     fn xml_v117_big_endian_round_trip() {
-        let table = ValueLabelTable::new("be".to_owned(), entries(&[(100, "hundred")]));
+        let set = ValueLabelSet::new("be".to_owned(), entries(&[(100, "hundred")]));
         let bytes = round_trip(Release::V117, ByteOrder::BigEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables[0].entries()[0].value(), 100);
-        assert_eq!(tables[0].entries()[0].label(), "hundred");
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries()[0].value(), 100);
+        assert_eq!(sets[0].entries()[0].label(), "hundred");
     }
 
     // -- V104 legacy layout -------------------------------------------------
 
     #[test]
-    fn v104_single_table_round_trip() {
+    fn v104_single_set_round_trip() {
         // V104 uses entry index as value. Values must be 0..8190.
-        let table = ValueLabelTable::new("old".to_owned(), entries(&[(0, "zero"), (2, "two")]));
+        let set = ValueLabelSet::new("old".to_owned(), entries(&[(0, "zero"), (2, "two")]));
         let bytes = round_trip(Release::V104, ByteOrder::LittleEndian, |writer| {
-            writer.write_value_label_table(&table)
+            writer.write_value_label_set(&set)
         });
-        let tables = read_back(bytes);
-        assert_eq!(tables.len(), 1);
+        let sets = read_back(bytes);
+        assert_eq!(sets.len(), 1);
         // Slot 1 was empty in the input — reader skips empty slots,
         // so entries come back with only values 0 and 2.
-        assert_eq!(tables[0].entries().len(), 2);
-        assert_eq!(tables[0].entries()[0].value(), 0);
-        assert_eq!(tables[0].entries()[0].label(), "zero");
-        assert_eq!(tables[0].entries()[1].value(), 2);
-        assert_eq!(tables[0].entries()[1].label(), "two");
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].value(), 0);
+        assert_eq!(sets[0].entries()[0].label(), "zero");
+        assert_eq!(sets[0].entries()[1].value(), 2);
+        assert_eq!(sets[0].entries()[1].label(), "two");
     }
 
     #[test]
     fn v104_rejects_negative_value() {
-        let table = ValueLabelTable::new("neg".to_owned(), entries(&[(-1, "nope")]));
+        let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "nope")]));
         // Use a one-shot writer; don't round_trip because finish()
-        // shouldn't be reached when write_value_label_table errors.
+        // shouldn't be reached when write_value_label_set errors.
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -494,7 +554,7 @@ mod tests {
             .unwrap()
             .into_value_label_writer()
             .unwrap();
-        let error = writer.write_value_label_table(&table).unwrap_err();
+        let error = writer.write_value_label_set(&set).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -506,7 +566,7 @@ mod tests {
 
     #[test]
     fn v104_rejects_duplicate_value() {
-        let table = ValueLabelTable::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
+        let set = ValueLabelSet::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -524,7 +584,7 @@ mod tests {
             .unwrap()
             .into_value_label_writer()
             .unwrap();
-        let error = writer.write_value_label_table(&table).unwrap_err();
+        let error = writer.write_value_label_set(&set).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -539,7 +599,7 @@ mod tests {
     #[test]
     fn label_too_long_in_v104_errors() {
         // V104 labels are 8-byte slots; anything longer should error.
-        let table = ValueLabelTable::new("long".to_owned(), entries(&[(0, "nine char")]));
+        let set = ValueLabelSet::new("long".to_owned(), entries(&[(0, "nine char")]));
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -557,7 +617,7 @@ mod tests {
             .unwrap()
             .into_value_label_writer()
             .unwrap();
-        let error = writer.write_value_label_table(&table).unwrap_err();
+        let error = writer.write_value_label_set(&set).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -568,10 +628,10 @@ mod tests {
     }
 
     #[test]
-    fn table_name_too_long_errors() {
+    fn set_name_too_long_errors() {
         // V114's value_label_name_len is 33 bytes.
         let long_name = "n".repeat(50);
-        let table = ValueLabelTable::new(long_name, Vec::new());
+        let set = ValueLabelSet::new(long_name, Vec::new());
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -589,7 +649,7 @@ mod tests {
             .unwrap()
             .into_value_label_writer()
             .unwrap();
-        let error = writer.write_value_label_table(&table).unwrap_err();
+        let error = writer.write_value_label_set(&set).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -603,7 +663,7 @@ mod tests {
     fn non_latin_label_in_windows_1252_errors() {
         // V114 default encoding is Windows-1252 — Japanese characters
         // aren't representable.
-        let table = ValueLabelTable::new("lang".to_owned(), entries(&[(1, "日")]));
+        let set = ValueLabelSet::new("lang".to_owned(), entries(&[(1, "日")]));
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -621,7 +681,7 @@ mod tests {
             .unwrap()
             .into_value_label_writer()
             .unwrap();
-        let error = writer.write_value_label_table(&table).unwrap_err();
+        let error = writer.write_value_label_set(&set).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -636,7 +696,7 @@ mod tests {
     /// Writes a fully populated XML DTA file: two-variable schema
     /// (one `Byte`, one `LongString`), one dataset-level
     /// characteristic, one record, one `strL` payload, one
-    /// value-label table. Shared by the seek-navigation and direct
+    /// value-label set. Shared by the seek-navigation and direct
     /// map-inspection tests.
     fn build_populated_xml_file(release: Release, byte_order: ByteOrder) -> Vec<u8> {
         use crate::stata::dta::characteristic::{Characteristic, CharacteristicTarget};
@@ -654,8 +714,8 @@ mod tests {
         let mut long_strings = LongStringTable::new();
         let ls_ref = long_strings.get_or_insert_by_content(2, 1, b"hello strL", false);
 
-        let value_label_table =
-            ValueLabelTable::new("lbl".to_owned(), entries(&[(0, "zero"), (1, "one")]));
+        let value_label_set =
+            ValueLabelSet::new("lbl".to_owned(), entries(&[(0, "zero"), (1, "one")]));
 
         let characteristic = Characteristic::new(
             CharacteristicTarget::Dataset,
@@ -685,7 +745,7 @@ mod tests {
             .unwrap();
         let mut value_label_writer = long_string_writer.into_value_label_writer().unwrap();
         value_label_writer
-            .write_value_label_table(&value_label_table)
+            .write_value_label_set(&value_label_set)
             .unwrap();
         value_label_writer.finish().unwrap().into_inner()
     }
@@ -713,12 +773,9 @@ mod tests {
 
         // Slot 11: <value_labels>.
         let mut value_label_reader = long_string_reader.seek_value_labels().unwrap();
-        let parsed_table = value_label_reader
-            .read_value_label_table()
-            .unwrap()
-            .unwrap();
-        assert_eq!(parsed_table.name(), "lbl");
-        assert_eq!(parsed_table.entries().len(), 2);
+        let parsed_set = value_label_reader.read_value_label_set().unwrap().unwrap();
+        assert_eq!(parsed_set.name(), "lbl");
+        assert_eq!(parsed_set.entries().len(), 2);
 
         // Slot 8: <characteristics>. Seek back from the value-label
         // reader — this is the only place that consumes slot 8

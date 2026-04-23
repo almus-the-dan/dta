@@ -267,7 +267,7 @@ impl<R: Read> SchemaReader<R> {
         )
     }
 
-    /// Reads the lbllist — one value-label table name per variable.
+    /// Reads the lbllist — one value-label set name per variable.
     fn read_value_label_names(
         &mut self,
         variable_count: usize,

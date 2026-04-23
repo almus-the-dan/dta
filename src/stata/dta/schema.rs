@@ -4,7 +4,7 @@ use super::variable::{Variable, VariableBuilder};
 /// Variable definitions and layout information from a DTA file.
 ///
 /// Contains variable names, types, display formats, labels, sort
-/// order, and value-label table associations. This is everything
+/// order, and value-label set associations. This is everything
 /// needed to interpret the data section.
 ///
 /// Construct via [`Schema::builder`].

@@ -7,16 +7,17 @@ use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
 use super::schema::Schema;
-use super::value_label::{ValueLabelEntry, ValueLabelTable};
+use super::value_label::{ValueLabelEntry, ValueLabelSet};
 use super::value_label_parse::{
     VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, entry_index_to_i32,
     overflow_error, parse_modern_payload,
 };
+use super::value_label_table::ValueLabelTable;
 
-/// Reads value-label tables from a DTA file.
+/// Reads value-label sets from a DTA file.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous
-/// phases. Yields [`ValueLabelTable`] entries via iteration, then
+/// phases. Yields [`ValueLabelSet`] entries via iteration, then
 /// optionally transitions to long-string reading.
 #[derive(Debug)]
 pub struct ValueLabelReader<R> {
@@ -59,25 +60,55 @@ impl<R> ValueLabelReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads the next value-label table.
+    /// Reads the next value-label set.
     ///
-    /// Returns `None` when all tables have been consumed. Each table
-    /// contains a name and a set of integer-to-string mappings.
+    /// Returns `None` when all sets have been consumed. Each set
+    /// contains a name and integer-to-string label mappings.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] on read failures and
-    /// [`DtaError::Format`] when the table bytes violate the DTA
+    /// [`DtaError::Format`] when the set bytes violate the DTA
     /// format specification.
-    pub fn read_value_label_table(&mut self) -> Result<Option<ValueLabelTable>> {
+    pub fn read_value_label_set(&mut self) -> Result<Option<ValueLabelSet>> {
         if self.completed {
             return Ok(None);
         }
         if self.header.release().has_old_value_labels() {
-            self.read_old_table()
+            self.read_old_set()
         } else {
-            self.read_modern_table()
+            self.read_modern_set()
         }
+    }
+
+    /// Reads all remaining value-label sets into `table`, keyed by
+    /// set name.
+    ///
+    /// Sets are inserted with first-wins semantics via
+    /// [`ValueLabelTable::get_or_insert`]: if `table` already contains
+    /// a set for a given name, it is left untouched and the duplicate
+    /// from the file is discarded. This mirrors
+    /// [`LongStringTable::get_or_insert_by_key`](super::long_string_table::LongStringTable::get_or_insert_by_key)
+    /// and lets callers pre-populate `table` or merge multiple files
+    /// without losing earlier data.
+    ///
+    /// This method drains the reader to completion — after it
+    /// returns, `self` is ready for section navigation or to be
+    /// dropped.
+    ///
+    /// Pairs naturally with [`ValueLabelTable::label_for`] for looking
+    /// up labels from record values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtaError::Io`] on read failures and
+    /// [`DtaError::Format`] when the set bytes violate the DTA format
+    /// specification.
+    pub fn read_remaining_into(&mut self, table: &mut ValueLabelTable) -> Result<()> {
+        while let Some(set) = self.read_value_label_set()? {
+            table.get_or_insert(set);
+        }
+        Ok(())
     }
 
     /// Skips all remaining value-label entries without processing
@@ -93,9 +124,9 @@ impl<R: BufRead> ValueLabelReader<R> {
             return Ok(());
         }
         if self.header.release().has_old_value_labels() {
-            while self.skip_old_table()? {}
+            while self.skip_old_set()? {}
         } else {
-            while self.skip_modern_table()? {}
+            while self.skip_modern_set()? {}
         }
         Ok(())
     }
@@ -106,8 +137,8 @@ impl<R: BufRead> ValueLabelReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads the table name and skips the trailing padding bytes.
-    fn read_table_name(&mut self) -> Result<String> {
+    /// Reads the set name and skips the trailing padding bytes.
+    fn read_set_name(&mut self) -> Result<String> {
         let release = self.header.release();
         let encoding = self.state.encoding();
         let name = self.state.read_fixed_string(
@@ -123,9 +154,9 @@ impl<R: BufRead> ValueLabelReader<R> {
         Ok(name)
     }
 
-    /// Skips the table name and trailing padding bytes without
+    /// Skips the set name and trailing padding bytes without
     /// decoding.
-    fn skip_table_name(&mut self) -> Result<()> {
+    fn skip_set_name(&mut self) -> Result<()> {
         let release = self.header.release();
         let skip_len = release.value_label_name_len() + release.value_label_table_padding_len();
         self.state.skip(skip_len, Section::ValueLabels)
@@ -137,17 +168,17 @@ impl<R: BufRead> ValueLabelReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads and parses one table in the old (pre-105) layout.
-    fn read_old_table(&mut self) -> Result<Option<ValueLabelTable>> {
-        let Some(table_len) = self.read_old_table_header()? else {
+    /// Reads and parses one set in the old (pre-105) layout.
+    fn read_old_set(&mut self) -> Result<Option<ValueLabelSet>> {
+        let Some(set_len) = self.read_old_set_header()? else {
             return Ok(None);
         };
 
-        let name = self.read_table_name()?;
+        let name = self.read_set_name()?;
         let encoding = self.state.encoding();
 
-        let entry_count = table_len / 8;
-        let payload = self.state.read_exact(table_len, Section::ValueLabels)?;
+        let entry_count = set_len / 8;
+        let payload = self.state.read_exact(set_len, Section::ValueLabels)?;
 
         let mut entries = Vec::with_capacity(entry_count);
         for entry_index in 0..entry_count {
@@ -161,29 +192,29 @@ impl<R: BufRead> ValueLabelReader<R> {
             entries.push(entry);
         }
 
-        let table = ValueLabelTable::new(name, entries);
-        Ok(Some(table))
+        let set = ValueLabelSet::new(name, entries);
+        Ok(Some(set))
     }
 
     /// Reads the old-format table header (table length, name, padding).
     /// Returns the payload size in bytes, or `None` at EOF.
-    fn read_old_table_header(&mut self) -> Result<Option<usize>> {
+    fn read_old_set_header(&mut self) -> Result<Option<usize>> {
         let byte_order = self.header.byte_order();
-        let Some(table_len) = self.state.try_read_u16(byte_order, Section::ValueLabels)? else {
+        let Some(set_len) = self.state.try_read_u16(byte_order, Section::ValueLabels)? else {
             self.completed = true;
             return Ok(None);
         };
-        let table_len = usize::from(table_len);
-        Ok(Some(table_len))
+        let set_len = usize::from(set_len);
+        Ok(Some(set_len))
     }
 
-    /// Skips one old-format table. Returns `false` at EOF.
-    fn skip_old_table(&mut self) -> Result<bool> {
-        let Some(table_len) = self.read_old_table_header()? else {
+    /// Skips one old-format set. Returns `false` at EOF.
+    fn skip_old_set(&mut self) -> Result<bool> {
+        let Some(set_len) = self.read_old_set_header()? else {
             return Ok(false);
         };
-        self.skip_table_name()?;
-        self.state.skip(table_len, Section::ValueLabels)?;
+        self.skip_set_name()?;
+        self.state.skip(set_len, Section::ValueLabels)?;
         Ok(true)
     }
 }
@@ -193,27 +224,27 @@ impl<R: BufRead> ValueLabelReader<R> {
 // ---------------------------------------------------------------------------
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads and parses one table in the modern (105+) layout.
-    fn read_modern_table(&mut self) -> Result<Option<ValueLabelTable>> {
-        let Some(table_len) = self.read_modern_table_header()? else {
+    /// Reads and parses one set in the modern (105+) layout.
+    fn read_modern_set(&mut self) -> Result<Option<ValueLabelSet>> {
+        let Some(set_len) = self.read_modern_set_header()? else {
             return Ok(None);
         };
 
-        let name = self.read_table_name()?;
+        let name = self.read_set_name()?;
         let byte_order = self.header.byte_order();
         let encoding = self.state.encoding();
 
-        let payload = self.state.read_exact(table_len, Section::ValueLabels)?;
-        let table = parse_modern_payload(payload, byte_order, encoding, &name)?;
+        let payload = self.state.read_exact(set_len, Section::ValueLabels)?;
+        let set = parse_modern_payload(payload, byte_order, encoding, &name)?;
 
-        self.read_modern_table_footer()?;
-        Ok(Some(table))
+        self.read_modern_set_footer()?;
+        Ok(Some(set))
     }
 
     /// Reads the modern-format table header (XML tags, table length,
     /// name, padding). Returns the payload size in bytes, or `None`
     /// when the section is exhausted.
-    fn read_modern_table_header(&mut self) -> Result<Option<usize>> {
+    fn read_modern_set_header(&mut self) -> Result<Option<usize>> {
         let byte_order = self.header.byte_order();
         let is_xml = self.header.release().is_xml_like();
 
@@ -231,16 +262,16 @@ impl<R: BufRead> ValueLabelReader<R> {
             return Ok(None);
         }
 
-        let Some(table_len) = self.state.try_read_u32(byte_order, Section::ValueLabels)? else {
+        let Some(set_len) = self.state.try_read_u32(byte_order, Section::ValueLabels)? else {
             self.completed = true;
             return Ok(None);
         };
-        let table_len = usize::try_from(table_len).map_err(|_| overflow_error())?;
-        Ok(Some(table_len))
+        let set_len = usize::try_from(set_len).map_err(|_| overflow_error())?;
+        Ok(Some(set_len))
     }
 
     /// Reads the closing `</lbl>` tag if this is an XML format.
-    fn read_modern_table_footer(&mut self) -> Result<()> {
+    fn read_modern_set_footer(&mut self) -> Result<()> {
         if self.header.release().is_xml_like() {
             self.state.expect_bytes(
                 b"</lbl>",
@@ -251,15 +282,15 @@ impl<R: BufRead> ValueLabelReader<R> {
         Ok(())
     }
 
-    /// Skips one modern-format table. Returns `false` when the section
+    /// Skips one modern-format set. Returns `false` when the section
     /// is exhausted.
-    fn skip_modern_table(&mut self) -> Result<bool> {
-        let Some(table_len) = self.read_modern_table_header()? else {
+    fn skip_modern_set(&mut self) -> Result<bool> {
+        let Some(set_len) = self.read_modern_set_header()? else {
             return Ok(false);
         };
-        self.skip_table_name()?;
-        self.state.skip(table_len, Section::ValueLabels)?;
-        self.read_modern_table_footer()?;
+        self.skip_set_name()?;
+        self.state.skip(set_len, Section::ValueLabels)?;
+        self.read_modern_set_footer()?;
         Ok(true)
     }
 
@@ -363,5 +394,157 @@ impl<R: BufRead + Seek> ValueLabelReader<R> {
         }
         let reader = LongStringReader::new(self.state, self.header, self.schema);
         Ok(reader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+    use crate::stata::dta::byte_order::ByteOrder;
+    use crate::stata::dta::dta_reader::DtaReader;
+    use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::release::Release;
+    use crate::stata::dta::variable::Variable;
+    use crate::stata::dta::variable_type::VariableType;
+
+    fn entries(pairs: &[(i32, &str)]) -> Vec<ValueLabelEntry> {
+        pairs
+            .iter()
+            .map(|&(v, l)| ValueLabelEntry::new(v, l.to_owned()))
+            .collect()
+    }
+
+    fn build_file_with_sets(release: Release, sets: &[ValueLabelSet]) -> Vec<u8> {
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = Header::builder(release, ByteOrder::LittleEndian).build();
+        let mut value_label_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap()
+            .into_record_writer()
+            .unwrap()
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap();
+        for set in sets {
+            value_label_writer.write_value_label_set(set).unwrap();
+        }
+        value_label_writer.finish().unwrap().into_inner()
+    }
+
+    fn value_label_reader_for(bytes: Vec<u8>) -> ValueLabelReader<Cursor<Vec<u8>>> {
+        let mut characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        characteristic_reader.skip_to_end().unwrap();
+        let mut record_reader = characteristic_reader.into_record_reader().unwrap();
+        record_reader.skip_to_end().unwrap();
+        let mut long_string_reader = record_reader.into_long_string_reader().unwrap();
+        long_string_reader.skip_to_end().unwrap();
+        long_string_reader.into_value_label_reader().unwrap()
+    }
+
+    #[test]
+    fn read_remaining_into_populates_table() {
+        let bytes = build_file_with_sets(
+            Release::V117,
+            &[
+                ValueLabelSet::new("a".to_owned(), entries(&[(0, "zero"), (1, "one")])),
+                ValueLabelSet::new("b".to_owned(), entries(&[(-1, "neg")])),
+            ],
+        );
+        let mut reader = value_label_reader_for(bytes);
+
+        let mut table = ValueLabelTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+
+        assert_eq!(table.len(), 2);
+        assert_eq!(table.get("a").unwrap().label_for(0), Some("zero"));
+        assert_eq!(table.get("a").unwrap().label_for(1), Some("one"));
+        assert_eq!(table.get("b").unwrap().label_for(-1), Some("neg"));
+    }
+
+    #[test]
+    fn read_remaining_into_works_on_old_format() {
+        let bytes = build_file_with_sets(
+            Release::V104,
+            &[ValueLabelSet::new(
+                "old".to_owned(),
+                entries(&[(0, "a"), (1, "b")]),
+            )],
+        );
+        let mut reader = value_label_reader_for(bytes);
+
+        let mut table = ValueLabelTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.get("old").unwrap().label_for(0), Some("a"));
+    }
+
+    #[test]
+    fn read_remaining_into_is_noop_when_no_sets() {
+        let bytes = build_file_with_sets(Release::V117, &[]);
+        let mut reader = value_label_reader_for(bytes);
+
+        let mut table = ValueLabelTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn read_remaining_into_first_wins_over_pre_existing_entries() {
+        let bytes = build_file_with_sets(
+            Release::V117,
+            &[ValueLabelSet::new(
+                "shared".to_owned(),
+                entries(&[(1, "from file")]),
+            )],
+        );
+        let mut reader = value_label_reader_for(bytes);
+
+        let mut table = ValueLabelTable::new();
+        table.insert(ValueLabelSet::new(
+            "shared".to_owned(),
+            entries(&[(1, "pre-existing")]),
+        ));
+        reader.read_remaining_into(&mut table).unwrap();
+
+        assert_eq!(table.len(), 1);
+        assert_eq!(
+            table.get("shared").unwrap().label_for(1),
+            Some("pre-existing")
+        );
+    }
+
+    #[test]
+    fn read_remaining_into_after_partial_consumption() {
+        let bytes = build_file_with_sets(
+            Release::V117,
+            &[
+                ValueLabelSet::new("a".to_owned(), entries(&[(0, "first")])),
+                ValueLabelSet::new("b".to_owned(), entries(&[(0, "second")])),
+            ],
+        );
+        let mut reader = value_label_reader_for(bytes);
+
+        let first = reader.read_value_label_set().unwrap().unwrap();
+        assert_eq!(first.name(), "a");
+
+        let mut table = ValueLabelTable::new();
+        reader.read_remaining_into(&mut table).unwrap();
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.get("b").unwrap().label_for(0), Some("second"));
     }
 }

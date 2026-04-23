@@ -49,7 +49,7 @@ impl Variable {
         &self.format
     }
 
-    /// The name of the value-label table associated with this
+    /// The name of the value-label set associated with this
     /// variable, or an empty string if none.
     #[must_use]
     #[inline]
@@ -113,7 +113,7 @@ impl VariableBuilder {
         self
     }
 
-    /// Sets the value-label table name.
+    /// Sets the value-label set name.
     #[must_use]
     #[inline]
     pub fn value_label_name(mut self, name: impl Into<String>) -> Self {

@@ -3,12 +3,12 @@
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
-use super::value_label::{ValueLabelEntry, ValueLabelTable};
+use super::value_label::{ValueLabelEntry, ValueLabelSet};
 
 /// Disambiguated 5-byte tag at the entry-start position within the
 /// modern value-labels section.
 pub(super) enum XmlLabelTag {
-    /// Opening `<lbl>` tag for a single value-label table.
+    /// Opening `<lbl>` tag for a single value-label set.
     EntryOpen,
     /// Start of the `</value_labels>` section close tag (`"</val"`).
     SectionClose,
@@ -46,7 +46,7 @@ pub(super) fn decode_label(
         })
 }
 
-/// Returns the shared "value-label table size overflow" format error.
+/// Returns the shared "value-label set size overflow" format error.
 /// Fires when a declared table field (entry count, text length, or a
 /// byte offset derived from them) overflows the platform's address
 /// space during parsing.
@@ -86,8 +86,8 @@ pub(super) fn parse_modern_payload(
     payload: &[u8],
     byte_order: ByteOrder,
     encoding: &'static encoding_rs::Encoding,
-    table_name: &str,
-) -> Result<ValueLabelTable> {
+    set_name: &str,
+) -> Result<ValueLabelSet> {
     if payload.len() < 8 {
         let error = DtaError::format(
             Section::ValueLabels,
@@ -170,6 +170,6 @@ pub(super) fn parse_modern_payload(
         entries.push(entry);
     }
 
-    let table = ValueLabelTable::new(table_name.to_owned(), entries);
-    Ok(table)
+    let set = ValueLabelSet::new(set_name.to_owned(), entries);
+    Ok(set)
 }

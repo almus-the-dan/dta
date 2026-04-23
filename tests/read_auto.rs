@@ -61,13 +61,13 @@ fn read_auto_dta_section_counts() {
         .into_value_label_reader()
         .expect("failed to transition to value label reader");
 
-    let mut value_label_table_count = 0;
+    let mut value_label_set_count = 0;
     while value_label_reader
-        .read_value_label_table()
-        .expect("failed to read value label table")
+        .read_value_label_set()
+        .expect("failed to read value label set")
         .is_some()
     {
-        value_label_table_count += 1;
+        value_label_set_count += 1;
     }
-    assert_eq!(value_label_table_count, 1);
+    assert_eq!(value_label_set_count, 1);
 }

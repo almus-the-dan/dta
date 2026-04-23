@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use encoding_rs::Encoding;
 
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
-use super::value_label::{ValueLabelEntry, ValueLabelTable};
+use super::value_label::{ValueLabelEntry, ValueLabelSet};
 
 /// Maximum value that fits in the V104 legacy layout. Each slot is
 /// 8 bytes and `table_len` is a `u16`, so `slot_count * 8 ≤ u16::MAX`
@@ -25,7 +25,7 @@ pub(super) type ModernTextPayload<'a> = (Vec<Cow<'a, [u8]>>, Vec<u32>, u32);
 /// The returned `Vec`'s length is the slot count (= max value + 1,
 /// or 0 when empty); empty slots are `None` ("no entry for this
 /// value"). Each slot holds a `Cow<[u8]>` — borrowed directly from
-/// the caller's `ValueLabelTable` on the UTF-8 → UTF-8 pass-through
+/// the caller's `ValueLabelSet` on the UTF-8 → UTF-8 pass-through
 /// path, owned only when the active encoding had to transcode.
 ///
 /// Errors upfront on:
@@ -34,7 +34,7 @@ pub(super) type ModernTextPayload<'a> = (Vec<Cow<'a, [u8]>>, Vec<u32>, u32);
 /// - labels exceeding the 8-byte slot (`FieldTooLarge`)
 /// - labels the active encoding can't represent (`InvalidEncoding`)
 pub(super) fn build_old_slot_table<'a>(
-    table: &'a ValueLabelTable,
+    table: &'a ValueLabelSet,
     encoding: &'static Encoding,
     position: u64,
 ) -> Result<Vec<Option<Cow<'a, [u8]>>>> {

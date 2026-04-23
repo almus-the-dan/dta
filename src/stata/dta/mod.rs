@@ -30,10 +30,10 @@ pub mod async_schema_reader;
 /// Async writer for variable definitions (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_schema_writer;
-/// Async reader for value-label tables (tokio feature).
+/// Async reader for value-label sets (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_value_label_reader;
-/// Async writer for value-label tables (tokio feature).
+/// Async writer for value-label sets (tokio feature).
 #[cfg(feature = "tokio")]
 pub mod async_value_label_writer;
 #[cfg(feature = "tokio")]
@@ -101,13 +101,15 @@ mod string_decoding;
 mod string_encoding;
 /// Cell value from the data section.
 pub mod value;
-/// Named table mapping integer values to string labels.
+/// Named set mapping integer values to string labels.
 pub mod value_label;
 mod value_label_format;
 mod value_label_parse;
-/// Reads value-label tables from a DTA file.
+/// Reads value-label sets from a DTA file.
 pub mod value_label_reader;
-/// Writes value-label tables to a DTA file.
+/// Keyed collection of value-label sets with resolver helpers.
+pub mod value_label_table;
+/// Writes value-label sets to a DTA file.
 pub mod value_label_writer;
 /// Single variable (column) definition.
 pub mod variable;

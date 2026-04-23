@@ -2,7 +2,7 @@
 
 A pure Rust library for reading and writing Stata's DTA file format.
 
-DTA is the binary format used by [Stata](https://www.stata.com/) to persist datasets. It's still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open. This library provides a streaming reader and writer covering every released version of the format (104 through 119), including XML-framed releases (117+), tagged missing values, value-label tables, and long-string (`strL`) storage.
+DTA is the binary format used by [Stata](https://www.stata.com/) to persist datasets. It's still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open. This library provides a streaming reader and writer covering every released version of the format (104 through 119), including XML-framed releases (117+), tagged missing values, value-label sets, and long-string (`strL`) storage.
 
 The API is built around a typestate chain, so you can't accidentally write a schema before a header, or read data bytes before the schema has been parsed. Each phase borrows the underlying I/O handle and hands it to the next phase, keeping the whole pipeline zero-copy where possible.
 
@@ -47,10 +47,10 @@ fn read_stata(path: &str) -> Result<()> {
     let mut long_string_reader = record_reader.into_long_string_reader()?;
     long_string_reader.skip_to_end()?;
 
-    // ValueLabelReader: iterate value-label tables.
+    // ValueLabelReader: iterate value-label sets.
     let mut value_label_reader = long_string_reader.into_value_label_reader()?;
-    while let Some(table) = value_label_reader.read_value_label_table()? {
-        println!("label set: {}", table.name());
+    while let Some(set) = value_label_reader.read_value_label_set()? {
+        println!("label set: {}", set.name());
     }
 
     Ok(())
