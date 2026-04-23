@@ -6,8 +6,9 @@ use super::dta_error::{FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::lazy_record::LazyRecord;
 use super::record::Record;
-use super::record_parse::parse_row;
+use super::record_parse::{parse_row_into, scratch_with_lifetime};
 use super::schema::Schema;
+use super::value::Value;
 
 /// Reads observation records from the data section of a DTA file
 /// asynchronously.
@@ -22,12 +23,20 @@ pub struct AsyncRecordReader<R> {
     remaining_observations: u64,
     opened: bool,
     completed: bool,
+    /// Scratch buffer reused across [`read_record`](Self::read_record)
+    /// calls to avoid a per-row heap allocation.
+    ///
+    /// Declared with `'static` as a placeholder; entries are always
+    /// `Value<'_>` borrowing from the state's row buffer. See
+    /// [`scratch_with_lifetime`] for the soundness invariant.
+    scratch: Vec<Value<'static>>,
 }
 
 impl<R> AsyncRecordReader<R> {
     #[must_use]
     pub(crate) fn new(state: AsyncReaderState<R>, header: Header, schema: Schema) -> Self {
         let remaining_observations = header.observation_count();
+        let scratch = Vec::with_capacity(schema.variables().len());
         Self {
             state,
             header,
@@ -35,6 +44,7 @@ impl<R> AsyncRecordReader<R> {
             remaining_observations,
             opened: false,
             completed: false,
+            scratch,
         }
     }
 
@@ -74,9 +84,20 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
         let release = self.header.release();
         let encoding = self.state.encoding();
         let row_bytes = self.state.buffer();
-        let values = parse_row(row_bytes, &self.schema, byte_order, release, encoding)?;
-        let record = Record::new(values);
-        Ok(Some(record))
+        // SAFETY: see the docs on `scratch_with_lifetime`. The helper
+        // clears the vec, we push only `Value<'_>` tied to `row_bytes`,
+        // and the returned `Record<'_>` reborrows `&mut self` so the
+        // next call is blocked until the record is dropped.
+        let scratch = unsafe { scratch_with_lifetime(&mut self.scratch) };
+        parse_row_into(
+            row_bytes,
+            &self.schema,
+            byte_order,
+            release,
+            encoding,
+            scratch,
+        )?;
+        Ok(Some(Record::new(scratch.as_slice())))
     }
 
     /// Reads the next observation without parsing individual values.
