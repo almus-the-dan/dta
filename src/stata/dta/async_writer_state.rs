@@ -107,9 +107,9 @@ impl<W> AsyncWriterState<W> {
         self.writer
     }
 
-    /// Narrows a `u32` value to `u16`, producing a `FieldTooLarge`
+    /// Narrows a `u64` value to `u16`, producing a `FieldTooLarge`
     /// format error on overflow.
-    pub fn narrow_to_u16(&self, value: u32, section: Section, field: Field) -> Result<u16> {
+    pub fn narrow_to_u16(&self, value: u64, section: Section, field: Field) -> Result<u16> {
         u16::try_from(value).map_err(|_| {
             DtaError::format(
                 section,
@@ -117,7 +117,7 @@ impl<W> AsyncWriterState<W> {
                 FormatErrorKind::FieldTooLarge {
                     field,
                     max: u64::from(u16::MAX),
-                    actual: u64::from(value),
+                    actual: value,
                 },
             )
         })

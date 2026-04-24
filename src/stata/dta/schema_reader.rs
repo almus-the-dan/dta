@@ -1143,14 +1143,14 @@ mod tests {
     #[test]
     fn binary_sort_order_out_of_bounds_returns_error() {
         // `Schema::builder` rejects an out-of-bounds sort entry at
-        // build time, so the writer can't produce this file. Hand-
-        // craft the bytes to verify the reader catches the same
-        // invariant when parsing raw input.
+        // build time, so the writer can't produce this file. Hand-craft
+        // the bytes to verify the reader catches the same invariant
+        // when parsing raw input.
         let release = Release::V114;
         let byte_order = ByteOrder::LittleEndian;
         let mut data = vec![
             release.to_byte(),
-            byte_order.to_byte(),
+            byte_order.to_header_byte(release).unwrap(),
             0x01, // filetype
             0x00, // padding
         ];

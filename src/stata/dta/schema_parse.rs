@@ -59,11 +59,11 @@ pub(super) fn parse_type_code(code: u16, release: Release, position: u64) -> Res
         }
     } else {
         match code {
-            0x62 => Ok(VariableType::Byte),   // 'b'
-            0x69 => Ok(VariableType::Int),    // 'i'
-            0x6C => Ok(VariableType::Long),   // 'l'
-            0x66 => Ok(VariableType::Float),  // 'f'
-            0x64 => Ok(VariableType::Double), // 'd'
+            0x62 if release.supports_byte_type() => Ok(VariableType::Byte), // 'b'
+            0x69 => Ok(VariableType::Int),                                  // 'i'
+            0x6C => Ok(VariableType::Long),                                 // 'l'
+            0x66 => Ok(VariableType::Float),                                // 'f'
+            0x64 => Ok(VariableType::Double),                               // 'd'
             0x80..=0xCF => Ok(VariableType::FixedString(code - 0x7F)),
             _ => invalid(),
         }

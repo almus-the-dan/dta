@@ -13,12 +13,17 @@ fn read_auto_dta_section_counts() {
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("dta"))
         .filter(|path| {
-            // Releases 102 and 103 are not supported.
+            // stata1_encoding.dta (V114/Windows-1252) reads fine, but
+            // stata1_encoding_118.dta contains UTF-16-LE byte sequences
+            // inside a file that declares itself UTF-8 — pandas bug or
+            // not, the data genuinely isn't valid UTF-8 and the strict
+            // V118 decoder rejects it. Separate concern from library
+            // support.
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            !name.contains("102") && !name.contains("103")
+            name != "stata1_encoding_118.dta"
         })
         .collect();
     paths.sort();

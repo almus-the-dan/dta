@@ -56,10 +56,13 @@ impl VariableType {
     ///
     /// | Formats   | Numeric codes     | String codes            |
     /// |-----------|-------------------|-------------------------|
-    /// | 104–110   | ASCII `b/i/l/f/d` | `0x80 + len`            |
+    /// | 102–110   | ASCII `b/i/l/f/d` | `0x80 + len`            |
     /// | 111–116   | `0xFB`–`0xFF`     | code = byte length      |
     /// | 117+      | `0xFFF6`–`0xFFFA` | code = byte length      |
     /// |           | `0x8000` = strL   |                         |
+    ///
+    /// V102 predates the `byte` storage type, so
+    /// [`Byte`](Self::Byte) returns `None` there.
     #[must_use]
     pub(crate) fn try_to_u16(self, release: Release) -> Option<u16> {
         if release >= Release::V117 {
@@ -67,7 +70,7 @@ impl VariableType {
         } else if release >= Release::V111 {
             self.try_to_u16_v111_v116(release)
         } else {
-            self.try_to_u16_v104_v110(release)
+            self.try_to_u16_v102_v110(release)
         }
     }
 
@@ -106,12 +109,13 @@ impl VariableType {
         }
     }
 
-    /// Encoding for formats 104–110: ASCII letters `b/i/l/f/d`
+    /// Encoding for formats 102–110: ASCII letters `b/i/l/f/d`
     /// for numerics, fixed strings as `0x80 + (len - 1)` (i.e.
-    /// `len + 0x7F`). `strL` is not representable.
-    fn try_to_u16_v104_v110(self, release: Release) -> Option<u16> {
+    /// `len + 0x7F`). `strL` is not representable. V102 predates the
+    /// `byte` type, so [`Byte`](Self::Byte) returns `None` there.
+    fn try_to_u16_v102_v110(self, release: Release) -> Option<u16> {
         match self {
-            Self::Byte => Some(u16::from(b'b')),
+            Self::Byte if release.supports_byte_type() => Some(u16::from(b'b')),
             Self::Int => Some(u16::from(b'i')),
             Self::Long => Some(u16::from(b'l')),
             Self::Float => Some(u16::from(b'f')),
@@ -119,7 +123,7 @@ impl VariableType {
             Self::FixedString(len) if (1..=release.max_fixed_string_len()).contains(&len) => {
                 Some(len + 0x7F)
             }
-            Self::LongString | Self::FixedString(_) => None,
+            Self::Byte | Self::LongString | Self::FixedString(_) => None,
         }
     }
 }

@@ -1,6 +1,7 @@
 use core::fmt;
 
 use super::dta_error::FormatErrorKind;
+use super::release::Release;
 
 /// Byte order (endianness) of values in a DTA file.
 ///
@@ -42,13 +43,20 @@ impl ByteOrder {
         }
     }
 
-    /// Returns the binary byte-order code (`0x01` or `0x02`).
-    #[must_use]
-    #[inline]
-    pub(crate) fn to_byte(self) -> u8 {
-        match self {
-            Self::BigEndian => 0x01,
-            Self::LittleEndian => 0x02,
+    /// Returns the on-disk byte-order byte for the given `release`.
+    ///
+    /// V102 writes `0x00` for little-endian and rejects big-endian
+    /// ([`BigEndianUnsupported`](FormatErrorKind::BigEndianUnsupported))
+    /// because Stata 3 ran on DOS/Intel only. V103+ use the standard
+    /// `0x01`/`0x02` codes.
+    pub(crate) fn to_header_byte(self, release: Release) -> Result<u8, FormatErrorKind> {
+        match (self, release) {
+            (Self::LittleEndian, Release::V102) => Ok(0x00),
+            (Self::BigEndian, Release::V102) => {
+                Err(FormatErrorKind::BigEndianUnsupported { release })
+            }
+            (Self::BigEndian, _) => Ok(0x01),
+            (Self::LittleEndian, _) => Ok(0x02),
         }
     }
 
@@ -142,9 +150,16 @@ impl ByteOrder {
         }
     }
 
-    /// Parses a v113–117 binary byte-order code (`0x01` or `0x02`).
-    pub(crate) fn from_byte(b: u8) -> Result<Self, FormatErrorKind> {
+    /// Parses a binary byte-order code (`0x01` or `0x02`) for pre-XML
+    /// formats.
+    ///
+    /// V102 predates the byteorder field — Stata 3 ran on DOS/Intel
+    /// and the field is always written as `0x00`. For that release
+    /// only, `0x00` is accepted and interpreted as little-endian.
+    /// Any other value, or a `0x00` in V103+, is rejected.
+    pub(crate) fn from_header_byte(b: u8, release: Release) -> Result<Self, FormatErrorKind> {
         match b {
+            0x00 if release == Release::V102 => Ok(Self::LittleEndian),
             0x01 => Ok(Self::BigEndian),
             0x02 => Ok(Self::LittleEndian),
             _ => Err(FormatErrorKind::InvalidByteOrder { byte: b }),
@@ -186,18 +201,40 @@ mod tests {
 
     #[test]
     fn from_byte_big_endian() {
-        assert_eq!(ByteOrder::from_byte(0x01), Ok(ByteOrder::BigEndian));
+        assert_eq!(
+            ByteOrder::from_header_byte(0x01, Release::V104),
+            Ok(ByteOrder::BigEndian),
+        );
     }
 
     #[test]
     fn from_byte_little_endian() {
-        assert_eq!(ByteOrder::from_byte(0x02), Ok(ByteOrder::LittleEndian));
+        assert_eq!(
+            ByteOrder::from_header_byte(0x02, Release::V104),
+            Ok(ByteOrder::LittleEndian),
+        );
     }
 
     #[test]
-    fn from_byte_invalid() {
+    fn from_byte_zero_in_v102_is_little_endian() {
         assert_eq!(
-            ByteOrder::from_byte(0x00),
+            ByteOrder::from_header_byte(0x00, Release::V102),
+            Ok(ByteOrder::LittleEndian),
+        );
+    }
+
+    #[test]
+    fn from_byte_zero_in_v103_is_rejected() {
+        assert_eq!(
+            ByteOrder::from_header_byte(0x00, Release::V103),
+            Err(FormatErrorKind::InvalidByteOrder { byte: 0x00 }),
+        );
+    }
+
+    #[test]
+    fn from_byte_zero_in_v104_is_rejected() {
+        assert_eq!(
+            ByteOrder::from_header_byte(0x00, Release::V104),
             Err(FormatErrorKind::InvalidByteOrder { byte: 0x00 }),
         );
     }

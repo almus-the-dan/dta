@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `StataByte::present`, `StataInt::present`, `StataLong::present`, `StataFloat::present`, and `StataDouble::present` return `Some(T)` for a present value and `None` for any missing variant, letting callers elide the `match` when they only care about the underlying scalar.
 - `Value::string(&'a str)` convenience constructor that wraps the argument in `Cow::Borrowed` — useful when building records for the writer.
+- Support for Stata formats **V102** and **V103**. The reader handles the V102 quirks — `0x00` byteorder byte (DOS/Intel implied little-endian), `u16` observation count, and the absence of the `byte` storage type — and writers emit the same shape. The pandas fixtures at V102 and V103 now read end-to-end. New error variant `FormatErrorKind::BigEndianUnsupported { release }` fires when big-endian is requested for V102, which Stata 3 never supported. Attempting to write a V102 file with a `byte` variable errors as `UnsupportedVariableType` (same pattern as `strL` in pre-V117 files).
 
 ### Changed
 

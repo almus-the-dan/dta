@@ -3,7 +3,7 @@ use std::io::{Seek, Write};
 use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
-use super::dta_error::{Field, Result, Section};
+use super::dta_error::{DtaError, Field, Result, Section};
 use super::header::Header;
 use super::header_format::{BINARY_FILETYPE, BINARY_RESERVED_PADDING, format_timestamp};
 use super::release::Release;
@@ -84,21 +84,30 @@ impl<W: Write> HeaderWriter<W> {
         let release = header.release();
         let byte_order = header.byte_order();
 
+        let byte_order_byte = byte_order
+            .to_header_byte(release)
+            .map_err(|kind| DtaError::format(Section::Header, self.state.position(), kind))?;
+
         self.state.write_u8(release.to_byte(), Section::Header)?;
-        self.state.write_u8(byte_order.to_byte(), Section::Header)?;
+        self.state.write_u8(byte_order_byte, Section::Header)?;
         self.state.write_u8(BINARY_FILETYPE, Section::Header)?;
         self.state
             .write_u8(BINARY_RESERVED_PADDING, Section::Header)?;
 
-        // Binary formats (104–116) always use u16 K and u32 N. Emit
-        // zero placeholders — the schema writer patches K and the
-        // record writer patches N once counts are known.
+        // Binary formats always use u16 K. N is u16 for V102, u32 for
+        // V103–V117. Emit zero placeholders — the schema writer
+        // patches K and the record writer patches N once counts are
+        // known.
         self.state
             .set_header_variable_count_offset(self.state.position());
         self.state.write_u16(0, byte_order, Section::Header)?;
         self.state
             .set_header_observation_count_offset(self.state.position());
-        self.state.write_u32(0, byte_order, Section::Header)?;
+        if release.supports_extended_binary_observation_count() {
+            self.state.write_u32(0, byte_order, Section::Header)?;
+        } else {
+            self.state.write_u16(0, byte_order, Section::Header)?;
+        }
 
         self.state.write_fixed_string(
             header.dataset_label(),

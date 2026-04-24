@@ -292,6 +292,12 @@ pub enum FormatErrorKind {
         /// 0-based variable index within the schema.
         variable_index: u32,
     },
+    /// Big-endian byte order was requested for a release that predates
+    /// multi-platform support (V102 / Stata 3 ran on DOS/Intel only).
+    BigEndianUnsupported {
+        /// The release that cannot be written big-endian.
+        release: Release,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -351,6 +357,11 @@ impl fmt::Display for FormatErrorKind {
                 f,
                 "tagged missing value (.a–.z) for variable index {variable_index} \
                  is not supported by format {release} (use MissingValue::System)",
+            ),
+            Self::BigEndianUnsupported { release } => write!(
+                f,
+                "big-endian byte order is not supported by format {release} \
+                 (V102 predates multi-platform support)",
             ),
             Self::RecordArityMismatch { expected, actual } => write!(
                 f,

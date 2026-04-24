@@ -24,11 +24,12 @@ pub(super) fn parse_binary_release(byte: u8) -> Result<Release> {
     Ok(release)
 }
 
-/// Validates a binary-format byte-order byte (`0x01` or `0x02`).
-/// The position is fixed at byte 1 of the file since this byte always
-/// follows the release byte at offset 0.
-pub(super) fn parse_binary_byte_order(byte: u8) -> Result<ByteOrder> {
-    ByteOrder::from_byte(byte).map_err(|kind| DtaError::format(Section::Header, 1, kind))
+/// Validates a binary-format byte-order byte (`0x01`, `0x02`, or —
+/// for V102 only — `0x00`). The position is fixed at byte 1 of the
+/// file since this byte always follows the release byte at offset 0.
+pub(super) fn parse_binary_byte_order(byte: u8, release: Release) -> Result<ByteOrder> {
+    ByteOrder::from_header_byte(byte, release)
+        .map_err(|kind| DtaError::format(Section::Header, 1, kind))
 }
 
 /// Parses a 3-byte ASCII release number from the XML `<release>` tag.

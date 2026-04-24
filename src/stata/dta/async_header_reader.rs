@@ -107,15 +107,20 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     ) -> Result<(Release, ByteOrder, u32, u64)> {
         let release = parse_binary_release(release_byte)?;
         let byte_order_byte = self.state.read_u8(Section::Header).await?;
-        let byte_order = parse_binary_byte_order(byte_order_byte)?;
+        let byte_order = parse_binary_byte_order(byte_order_byte, release)?;
 
         // filetype (0x01) + unused padding — skip both
         self.state.skip(2, Section::Header).await?;
 
         let variable_count = self.state.read_u16(byte_order, Section::Header).await?;
         let variable_count = u32::from(variable_count);
-        let observation_count = self.state.read_u32(byte_order, Section::Header).await?;
-        let observation_count = u64::from(observation_count);
+        // V102 stores N as `u16`; V103–V117 use `u32`. The XML path
+        // (V118+) handles its own widths via `<N>`.
+        let observation_count = if release.supports_extended_binary_observation_count() {
+            u64::from(self.state.read_u32(byte_order, Section::Header).await?)
+        } else {
+            u64::from(self.state.read_u16(byte_order, Section::Header).await?)
+        };
 
         Ok((release, byte_order, variable_count, observation_count))
     }
@@ -501,7 +506,8 @@ mod tests {
 
     #[tokio::test]
     async fn binary_unsupported_release() {
-        let data = vec![103, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
+        // 101 is below our supported range of 102–119.
+        let data = vec![101, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
         let error = DtaReader::default()
             .from_tokio_reader(data.as_slice())
             .read_header()
@@ -509,7 +515,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            DtaError::Format(ref e) if e.kind() == FormatErrorKind::UnsupportedRelease { release: 103 }
+            DtaError::Format(ref e) if e.kind() == FormatErrorKind::UnsupportedRelease { release: 101 }
         ));
     }
 

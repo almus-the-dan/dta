@@ -162,8 +162,10 @@ impl<W: Write + Seek> RecordWriter<W> {
         Ok(())
     }
 
-    /// Seek-patches the header N field with `self.observation_count`,
-    /// narrowing to `u32` for pre-V118 releases.
+    /// Seek-patches the header N field with `self.observation_count`.
+    ///
+    /// Narrowed to match the release's on-disk width:
+    /// `u16` for V102, `u32` for V103–V117, `u64` for V118+.
     fn patch_header_observation_count(&mut self) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
@@ -171,17 +173,34 @@ impl<W: Write + Seek> RecordWriter<W> {
             .state
             .header_observation_count_offset()
             .expect("header writer set N offset before RecordWriter was constructed");
-        if release.supports_extended_observation_count() {
-            self.state
-                .patch_u64_at(offset, self.observation_count, byte_order, Section::Header)?;
-        } else {
-            let narrowed = self.state.narrow_to_u32(
-                self.observation_count,
-                Section::Header,
-                Field::ObservationCount,
-            )?;
-            self.state
-                .patch_u32_at(offset, narrowed, byte_order, Section::Header)?;
+        match release.binary_observation_count_width() {
+            8 => {
+                self.state.patch_u64_at(
+                    offset,
+                    self.observation_count,
+                    byte_order,
+                    Section::Header,
+                )?;
+            }
+            4 => {
+                let narrowed = self.state.narrow_to_u32(
+                    self.observation_count,
+                    Section::Header,
+                    Field::ObservationCount,
+                )?;
+                self.state
+                    .patch_u32_at(offset, narrowed, byte_order, Section::Header)?;
+            }
+            2 => {
+                let narrowed = self.state.narrow_to_u16(
+                    self.observation_count,
+                    Section::Header,
+                    Field::ObservationCount,
+                )?;
+                self.state
+                    .patch_u16_at(offset, narrowed, byte_order, Section::Header)?;
+            }
+            other => unreachable!("unexpected observation count width {}", other),
         }
         Ok(())
     }
@@ -305,9 +324,11 @@ impl<W: Write> RecordWriter<W> {
         let observation = long_string_ref.observation();
         if release.supports_extended_observation_count() {
             // V118+: u16 variable + u48 observation.
-            let narrowed_variable =
-                self.state
-                    .narrow_to_u16(variable, Section::Records, Field::VariableCount)?;
+            let narrowed_variable = self.state.narrow_to_u16(
+                u64::from(variable),
+                Section::Records,
+                Field::VariableCount,
+            )?;
             self.state
                 .write_u16(narrowed_variable, byte_order, Section::Records)?;
             self.write_u48(observation, byte_order)?;

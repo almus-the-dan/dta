@@ -238,7 +238,7 @@ impl<W: AsyncWrite + Unpin> AsyncCharacteristicWriter<W> {
                 .await?;
         } else {
             let narrow = self.state.narrow_to_u16(
-                payload_len,
+                u64::from(payload_len),
                 Section::Characteristics,
                 Field::CharacteristicValue,
             )?;

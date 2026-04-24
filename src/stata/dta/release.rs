@@ -7,7 +7,7 @@ use super::dta_error::FormatErrorKind;
 /// DTA format version (release number).
 ///
 /// Each variant corresponds to a `ds_format` byte value found in the
-/// file header. The supported range is 104–119, matching `ReadStat`.
+/// file header. The supported range is 102–119, matching `ReadStat`.
 ///
 /// Version-specific field sizes and feature queries are exposed as
 /// methods so that callers can dispatch on the release without
@@ -15,6 +15,13 @@ use super::dta_error::FormatErrorKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum Release {
+    /// Stata format 102. Stata 3 on DOS — no `byte` type, no
+    /// big-endian support, 30-byte dataset label, byteorder header
+    /// byte is always `0x00`.
+    V102 = 102,
+    /// Stata format 103. Adds the `byte` type, big-endian support,
+    /// and a 32-byte dataset label (matching V104+).
+    V103 = 103,
     /// Stata format 104.
     V104 = 104,
     /// Stata format 105. Adds timestamps and expansion fields.
@@ -54,6 +61,8 @@ impl TryFrom<u8> for Release {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
+            102 => Ok(Self::V102),
+            103 => Ok(Self::V103),
             104 => Ok(Self::V104),
             105 => Ok(Self::V105),
             106 => Ok(Self::V106),
@@ -170,6 +179,52 @@ impl Release {
     #[must_use]
     pub(crate) fn supports_extended_observation_count(self) -> bool {
         self >= Self::V118
+    }
+
+    /// Whether the binary-format observation count is stored as `u32`
+    /// (V103+). V102 predates multi-million-row datasets and uses
+    /// `u16`.
+    ///
+    /// Only meaningful for the binary-format header path (V102–V117).
+    /// XML formats (V118+) dispatch on
+    /// [`supports_extended_observation_count`](Self::supports_extended_observation_count).
+    #[must_use]
+    #[inline]
+    pub(crate) fn supports_extended_binary_observation_count(self) -> bool {
+        self >= Self::V103
+    }
+
+    /// Byte width of the binary-format observation count field.
+    ///
+    /// | Release | Width | Type |
+    /// |---------|-------|------|
+    /// | V102    | 2     | u16  |
+    /// | V103–V117 | 4   | u32  |
+    /// | V118+   | 8     | u64  |
+    ///
+    /// Not consulted for XML formats — those read the count from
+    /// the `<N>` tag as a binary integer whose width is governed by
+    /// [`supports_extended_observation_count`](Self::supports_extended_observation_count).
+    #[must_use]
+    pub(crate) fn binary_observation_count_width(self) -> usize {
+        if self >= Self::V118 {
+            8
+        } else if self.supports_extended_binary_observation_count() {
+            4
+        } else {
+            2
+        }
+    }
+
+    /// Whether the format supports the `byte` storage type.
+    ///
+    /// V102 (Stata 3) had only `int`, `long`, `float`, `double`, and
+    /// fixed-width strings. V103 added `byte` and it has been present
+    /// ever since.
+    #[must_use]
+    #[inline]
+    pub(crate) fn supports_byte_type(self) -> bool {
+        self >= Self::V103
     }
 
     /// Whether the format supports tagged missing values (`.a`–`.z`),
@@ -329,10 +384,11 @@ impl Release {
 
     /// Whether the format uses the old (pre-108) value-label layout.
     ///
-    /// The old layout (V104-V107) stores each set as `u16` entry count
-    /// + 9-byte name + 1-byte pad + `u16` values + `8`-byte labels.
-    /// Format 108+ switches to a richer layout with a `u32` payload
-    /// length, `u32` values, and variable-width labels.
+    /// The old layout (V104-V107) stores each set as a `u16` entry
+    /// count, a 9-byte name, a 1-byte pad, `u16` values, and 8-byte
+    /// fixed-width labels. Format 108+ switches to a richer layout
+    /// with a `u32` payload length, `u32` values, and variable-width
+    /// labels.
     #[must_use]
     pub(crate) fn has_old_value_labels(self) -> bool {
         self < Self::V108
@@ -356,7 +412,7 @@ mod tests {
 
     #[test]
     fn try_from_valid_range() {
-        for v in 104..=119 {
+        for v in 102..=119 {
             let r = Release::try_from(v).unwrap();
             assert_eq!(r.to_byte(), v);
         }
@@ -365,8 +421,8 @@ mod tests {
     #[test]
     fn try_from_below_range() {
         assert_eq!(
-            Release::try_from(103),
-            Err(FormatErrorKind::UnsupportedRelease { release: 103 }),
+            Release::try_from(101),
+            Err(FormatErrorKind::UnsupportedRelease { release: 101 }),
         );
     }
 

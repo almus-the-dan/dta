@@ -107,15 +107,20 @@ impl<R: Read> HeaderReader<R> {
     fn read_binary_preamble(&mut self, release_byte: u8) -> Result<(Release, ByteOrder, u32, u64)> {
         let release = parse_binary_release(release_byte)?;
         let byte_order_byte = self.state.read_u8(Section::Header)?;
-        let byte_order = parse_binary_byte_order(byte_order_byte)?;
+        let byte_order = parse_binary_byte_order(byte_order_byte, release)?;
 
         // filetype (0x01) + unused padding — skip both
         self.state.skip(2, Section::Header)?;
 
         let variable_count = self.state.read_u16(byte_order, Section::Header)?;
         let variable_count = u32::from(variable_count);
-        let observation_count = self.state.read_u32(byte_order, Section::Header)?;
-        let observation_count = u64::from(observation_count);
+        // V102 stores N as `u16`; V103–V117 use `u32`. The XML path
+        // (V118+) handles its own widths via `<N>`.
+        let observation_count = if release.supports_extended_binary_observation_count() {
+            u64::from(self.state.read_u32(byte_order, Section::Header)?)
+        } else {
+            u64::from(self.state.read_u16(byte_order, Section::Header)?)
+        };
 
         Ok((release, byte_order, variable_count, observation_count))
     }
@@ -492,6 +497,89 @@ mod tests {
     }
 
     #[test]
+    fn binary_v102_round_trip() {
+        // V102 doesn't support the `byte` storage type, so the
+        // generic helper (which uses `Byte`) doesn't apply — build a
+        // minimal `Int`-only record stream here instead.
+        use crate::stata::dta::schema::Schema;
+        use crate::stata::dta::value::Value;
+        use crate::stata::dta::variable::Variable;
+        use crate::stata::dta::variable_type::VariableType;
+        use crate::stata::stata_int::StataInt;
+
+        let expected = Header::builder(Release::V102, ByteOrder::LittleEndian)
+            .dataset_label("v102 round-trip")
+            .build();
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Int, "x").format("%8.0g"))
+            .build()
+            .unwrap();
+        let mut record_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(expected)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap()
+            .into_record_writer()
+            .unwrap();
+        let row = [Value::Int(StataInt::Present(7))];
+        for _ in 0..3 {
+            record_writer.write_record(&row).unwrap();
+        }
+        let bytes = record_writer
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap()
+            .finish()
+            .unwrap()
+            .into_inner();
+
+        // Verify the on-disk byteorder byte is 0x00 for V102.
+        assert_eq!(bytes[1], 0x00, "V102 should write byteorder 0x00");
+
+        let header = read_back(bytes);
+        assert_eq!(header.release(), Release::V102);
+        assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
+        assert_eq!(header.variable_count(), 1);
+        assert_eq!(header.observation_count(), 3);
+        assert_eq!(header.dataset_label(), "v102 round-trip");
+        assert!(header.timestamp().is_none());
+    }
+
+    #[test]
+    fn binary_v103_round_trip() {
+        // V103 adds `byte` and the standard 0x01/0x02 byteorder byte.
+        let expected = Header::builder(Release::V103, ByteOrder::BigEndian)
+            .dataset_label("v103 BE")
+            .build();
+        let bytes = serialize_through_writer(&expected, 2, 5);
+        assert_eq!(bytes[1], 0x01, "V103 BE should write byteorder 0x01");
+
+        let header = read_back(bytes);
+        assert_eq!(header.release(), Release::V103);
+        assert_eq!(header.byte_order(), ByteOrder::BigEndian);
+        assert_eq!(header.variable_count(), 2);
+        assert_eq!(header.observation_count(), 5);
+        assert_eq!(header.dataset_label(), "v103 BE");
+    }
+
+    #[test]
+    fn binary_v102_rejects_big_endian_at_write_time() {
+        let header = Header::builder(Release::V102, ByteOrder::BigEndian).build();
+        let error = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DtaError::Format(ref e) if e.kind() == FormatErrorKind::BigEndianUnsupported {
+                release: Release::V102,
+            }
+        ));
+    }
+
+    #[test]
     fn binary_v107_short_label() {
         let expected = Header::builder(Release::V107, ByteOrder::LittleEndian)
             .dataset_label("short")
@@ -512,15 +600,16 @@ mod tests {
 
     #[test]
     fn binary_unsupported_release() {
-        // Hand-craft bytes with an unsupported release number
-        let data = vec![103, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
+        // Hand-craft bytes with an unsupported release number (101 is
+        // below our supported range of 102–119).
+        let data = vec![101, 0x02, 0x01, 0x00, 0, 1, 0, 0, 0, 1];
         let error = DtaReader::default()
             .from_reader(Cursor::new(data))
             .read_header()
             .unwrap_err();
         assert!(matches!(
             error,
-            DtaError::Format(ref e) if e.kind() == FormatErrorKind::UnsupportedRelease { release: 103 }
+            DtaError::Format(ref e) if e.kind() == FormatErrorKind::UnsupportedRelease { release: 101 }
         ));
     }
 

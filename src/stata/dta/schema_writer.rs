@@ -161,9 +161,11 @@ impl<W: Write + Seek> SchemaWriter<W> {
             self.state
                 .patch_u32_at(offset, count, byte_order, Section::Header)?;
         } else {
-            let narrowed =
-                self.state
-                    .narrow_to_u16(count, Section::Header, Field::VariableCount)?;
+            let narrowed = self.state.narrow_to_u16(
+                u64::from(count),
+                Section::Header,
+                Field::VariableCount,
+            )?;
             self.state
                 .patch_u16_at(offset, narrowed, byte_order, Section::Header)?;
         }
@@ -249,9 +251,11 @@ impl<W: Write> SchemaWriter<W> {
             if extended {
                 self.state.write_u32(on_disk, byte_order, Section::Schema)?;
             } else {
-                let narrow =
-                    self.state
-                        .narrow_to_u16(on_disk, Section::Schema, Field::SortOrder)?;
+                let narrow = self.state.narrow_to_u16(
+                    u64::from(on_disk),
+                    Section::Schema,
+                    Field::SortOrder,
+                )?;
                 self.state.write_u16(narrow, byte_order, Section::Schema)?;
             }
         }
@@ -648,6 +652,32 @@ mod tests {
                 FormatErrorKind::UnsupportedVariableType {
                     variable_type: VariableType::LongString,
                     release: Release::V114,
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn byte_type_in_v102_errors() {
+        // Stata 3 (V102) predates the `byte` storage type.
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "b").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = make_header(Release::V102, ByteOrder::LittleEndian, &schema);
+        let error = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DtaError::Format(ref e) if matches!(
+                e.kind(),
+                FormatErrorKind::UnsupportedVariableType {
+                    variable_type: VariableType::Byte,
+                    release: Release::V102,
                 }
             )
         ));

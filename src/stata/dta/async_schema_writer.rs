@@ -155,9 +155,11 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncSchemaWriter<W> {
                 .patch_u32_at(offset, count, byte_order, Section::Header)
                 .await?;
         } else {
-            let narrowed =
-                self.state
-                    .narrow_to_u16(count, Section::Header, Field::VariableCount)?;
+            let narrowed = self.state.narrow_to_u16(
+                u64::from(count),
+                Section::Header,
+                Field::VariableCount,
+            )?;
             self.state
                 .patch_u16_at(offset, narrowed, byte_order, Section::Header)
                 .await?;
@@ -250,9 +252,11 @@ impl<W: AsyncWrite + Unpin> AsyncSchemaWriter<W> {
                     .write_u32(on_disk, byte_order, Section::Schema)
                     .await?;
             } else {
-                let narrow =
-                    self.state
-                        .narrow_to_u16(on_disk, Section::Schema, Field::SortOrder)?;
+                let narrow = self.state.narrow_to_u16(
+                    u64::from(on_disk),
+                    Section::Schema,
+                    Field::SortOrder,
+                )?;
                 self.state
                     .write_u16(narrow, byte_order, Section::Schema)
                     .await?;

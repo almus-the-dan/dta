@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn present_returns_inner_for_present() {
-        assert_eq!(StataDouble::Present(3.14).present(), Some(3.14));
+        assert_eq!(StataDouble::Present(2.5).present(), Some(2.5));
     }
 
     #[test]

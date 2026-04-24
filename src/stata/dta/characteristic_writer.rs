@@ -230,7 +230,7 @@ impl<W: Write> CharacteristicWriter<W> {
                 .write_u32(payload_len, byte_order, Section::Characteristics)?;
         } else {
             let narrow = self.state.narrow_to_u16(
-                payload_len,
+                u64::from(payload_len),
                 Section::Characteristics,
                 Field::CharacteristicValue,
             )?;

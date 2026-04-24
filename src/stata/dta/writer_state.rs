@@ -112,10 +112,10 @@ impl<W> WriterState<W> {
         self.writer
     }
 
-    /// Narrows a `u32` value to `u16`, producing a `FieldTooLarge`
+    /// Narrows a `u64` value to `u16`, producing a `FieldTooLarge`
     /// format error (tagged with the current [`position`](Self::position))
     /// on overflow.
-    pub fn narrow_to_u16(&self, value: u32, section: Section, field: Field) -> Result<u16> {
+    pub fn narrow_to_u16(&self, value: u64, section: Section, field: Field) -> Result<u16> {
         u16::try_from(value).map_err(|_| {
             DtaError::format(
                 section,
@@ -123,7 +123,7 @@ impl<W> WriterState<W> {
                 FormatErrorKind::FieldTooLarge {
                     field,
                     max: u64::from(u16::MAX),
-                    actual: u64::from(value),
+                    actual: value,
                 },
             )
         })
@@ -372,7 +372,7 @@ mod tests {
     fn narrow_to_u16_succeeds_at_max() {
         let state = new_state();
         let result = state
-            .narrow_to_u16(u32::from(u16::MAX), Section::Header, Field::VariableCount)
+            .narrow_to_u16(u64::from(u16::MAX), Section::Header, Field::VariableCount)
             .unwrap();
         assert_eq!(result, u16::MAX);
     }
@@ -382,7 +382,7 @@ mod tests {
         let state = new_state();
         let error = state
             .narrow_to_u16(
-                u32::from(u16::MAX) + 1,
+                u64::from(u16::MAX) + 1,
                 Section::Header,
                 Field::VariableCount,
             )
