@@ -5,7 +5,7 @@
 /// that bit pattern are data.
 ///
 /// In pre-113 formats, only bit patterns above `+MAX_VALID_FLOAT` (roughly
-/// `1.7014e38`) encode system missing (`.`); tagged missings are
+/// `1.7014e38`) encode system missing (`.`); tagged missing values are
 /// unrepresentable.
 ///
 /// # Examples

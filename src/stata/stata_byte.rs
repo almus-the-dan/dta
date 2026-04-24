@@ -7,7 +7,7 @@
 ///
 /// In pre-113 formats, only the single value 0x7F (127 signed) encodes
 /// system missing; values 0x65–0x7E (101–126) are valid data. Tagged
-/// missings (`.a`–`.z`) are unrepresentable in those formats.
+/// missing values (`.a`–`.z`) are unrepresentable in those formats.
 ///
 /// # Examples
 ///
@@ -53,7 +53,7 @@ impl StataByte {
     ///   encode `.`, `.a`, …, `.z` respectively. −128 is outside Stata's
     ///   documented range but is treated as present.
     /// - **Pre-DTA 113**: the signed byte range −128..=126 is data; 127
-    ///   encodes system missing (`.`). Tagged missings do not exist.
+    ///   encodes system missing (`.`). Tagged missing values do not exist.
     ///
     /// # Errors
     ///
@@ -82,7 +82,7 @@ impl StataByte {
     ///
     /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
     /// tagged missing (`.a`–`.z`) and `release` is pre-113. Pre-113
-    /// formats have no way to encode tagged missings.
+    /// formats have no way to encode tagged missing values.
     pub fn to_raw(self, release: Release) -> Result<u8> {
         match self {
             Self::Present(v) => Ok(v.cast_unsigned()),

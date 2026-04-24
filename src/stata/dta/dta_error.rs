@@ -5,6 +5,7 @@ use super::variable_type::VariableType;
 
 /// Section of the DTA file where an error occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Section {
     /// File header (release, byte order, counts, label, timestamp).
     Header,
@@ -39,6 +40,7 @@ impl fmt::Display for Section {
 /// [`FormatErrorKind::InvalidEncoding`] to pinpoint which field
 /// triggered the error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Field {
     /// The release / format version number.
     ReleaseNumber,
@@ -106,6 +108,7 @@ impl fmt::Display for Field {
 
 /// Known XML-style section tags in format 117+ files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Tag {
     /// `<header>`
     Header,
@@ -162,6 +165,7 @@ impl fmt::Display for Tag {
 ///
 /// Every variant is small and stack-only — no heap allocations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormatErrorKind {
     /// Magic bytes or section tag do not match any known format.
     InvalidMagic,
@@ -427,6 +431,7 @@ impl std::error::Error for FormatError {}
 
 /// Unified error type for the DTA reader.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DtaError {
     /// An I/O error from the underlying reader.
     Io {

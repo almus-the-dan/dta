@@ -2,6 +2,7 @@ use core::fmt;
 
 /// Unified error type for Stata value parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StataError {
     /// A raw value does not encode a Stata missing value.
     NotMissingValue,

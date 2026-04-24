@@ -182,7 +182,7 @@ impl Release {
     /// sentinels have only one valid value per type).
     #[must_use]
     #[inline]
-    pub fn supports_tagged_missing(self) -> bool {
+    pub(crate) fn supports_tagged_missing(self) -> bool {
         self >= Self::V113
     }
 
@@ -196,7 +196,7 @@ impl Release {
     /// `+MAX_DOUBLE`, and 113+ uses NaN bit patterns.
     #[must_use]
     #[inline]
-    pub fn uses_magic_double_missing(self) -> bool {
+    pub(crate) fn uses_magic_double_missing(self) -> bool {
         self <= Self::V105
     }
 }

@@ -7,7 +7,7 @@
 ///
 /// In pre-113 formats, only the single value `0x7FFF_FFFF` (2,147,483,647
 /// signed) encodes system missing; values `0x7FFF_FFE5`–`0x7FFF_FFFE` are
-/// valid data. Tagged missings (`.a`–`.z`) are unrepresentable in those
+/// valid data. Tagged missing values (`.a`–`.z`) are unrepresentable in those
 /// formats.
 ///
 /// # Examples

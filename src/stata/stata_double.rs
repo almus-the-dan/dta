@@ -89,7 +89,7 @@ impl StataDouble {
 
         // V104/V105: the magic 2^333 sentinel lives inside the valid
         // IEEE range, so it must be matched exactly. Fall through to the
-        // range check afterwards so a V104 file carrying an out-of-range
+        // range check afterward so a V104 file carrying an out-of-range
         // positive value (e.g., a modern sentinel a loose writer emitted)
         // is also recognized.
         if release.uses_magic_double_missing() && bits == MISSING_DOUBLE_SYSTEM_V104 {
