@@ -26,7 +26,9 @@ use super::variable_type::VariableType;
 /// characters).
 ///
 /// `LongStringRef` values are unresolved pointers into the strL
-/// section; use the [`LongStringReader`] to retrieve the actual text.
+/// section; use the
+/// [`LongStringReader`](super::long_string_reader::LongStringReader)
+/// to retrieve the actual text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
     /// A 1-byte signed integer or missing value.

@@ -7,7 +7,7 @@ use super::stata_error::{Result, StataError};
 /// DTA files encode timestamps as fixed-length strings in the format
 /// `"dd Mon yyyy hh:mm"` (e.g. `"01 Jan 2024 13:45"`). This struct
 /// stores the parsed components and can reconstruct the string via
-/// [`Display`].
+/// [`Display`](core::fmt::Display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StataTimestamp {
     day: u8,

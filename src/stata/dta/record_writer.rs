@@ -82,16 +82,16 @@ impl<W: Write + Seek> RecordWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`] with:
-    /// - [`RecordArityMismatch`](FormatErrorKind::RecordArityMismatch)
+    /// Returns [`DtaError::Format`](super::dta_error::DtaError::Format) with:
+    /// - [`RecordArityMismatch`](super::dta_error::FormatErrorKind::RecordArityMismatch)
     ///   if `values.len() != schema.variables().len()`.
-    /// - [`RecordValueTypeMismatch`](FormatErrorKind::RecordValueTypeMismatch)
+    /// - [`RecordValueTypeMismatch`](super::dta_error::FormatErrorKind::RecordValueTypeMismatch)
     ///   if any value's variant does not match its variable's type.
-    /// - [`RecordStringTooLong`](FormatErrorKind::RecordStringTooLong)
+    /// - [`RecordStringTooLong`](super::dta_error::FormatErrorKind::RecordStringTooLong)
     ///   if a string value exceeds its variable's fixed-width slot.
-    /// - [`InvalidEncoding`](FormatErrorKind::InvalidEncoding) if a
+    /// - [`InvalidEncoding`](super::dta_error::FormatErrorKind::InvalidEncoding) if a
     ///   string cannot be represented in the active encoding.
-    /// - [`FieldTooLarge`](FormatErrorKind::FieldTooLarge) if a
+    /// - [`FieldTooLarge`](super::dta_error::FormatErrorKind::FieldTooLarge) if a
     ///   [`LongStringRef`] component (variable or observation)
     ///   exceeds the on-disk field width.
     pub fn write_record(&mut self, values: &[Value<'_>]) -> Result<()> {
@@ -133,10 +133,11 @@ impl<W: Write + Seek> RecordWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on sink failures and
-    /// [`DtaError::Format`] with
-    /// [`FieldTooLarge`](FormatErrorKind::FieldTooLarge) if the
-    /// observation count exceeds `u32::MAX` on a pre-V118 release.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// sink failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format) with
+    /// [`FieldTooLarge`](super::dta_error::FormatErrorKind::FieldTooLarge)
+    /// if the observation count exceeds `u32::MAX` on a pre-V118 release.
     ///
     /// # Panics
     ///

@@ -16,7 +16,8 @@ use super::schema::Schema;
 /// Unlike the header and schema phases, characteristic writing
 /// accepts any number of entries via
 /// [`write_characteristic`](Self::write_characteristic) before
-/// transitioning via [`finish`](Self::finish). Handles both binary
+/// transitioning via [`into_record_writer`](Self::into_record_writer).
+/// Handles both binary
 /// and XML encodings internally: binary emits
 /// `(data_type, length, payload)` triples terminated by a zero-length
 /// entry; XML emits `<characteristics>` / `<ch>` tags.
@@ -89,7 +90,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format)
+    /// Returns [`DtaError::Format`]
     /// with [`CharacteristicsUnsupported`](FormatErrorKind::CharacteristicsUnsupported)
     /// if the header's release is V104 (which has no expansion-field
     /// section), [`InvalidEncoding`](FormatErrorKind::InvalidEncoding)
@@ -125,7 +126,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncCharacteristicWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
+    /// Returns [`DtaError::Io`] on sink failures.
     pub async fn into_record_writer(mut self) -> Result<AsyncRecordWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();

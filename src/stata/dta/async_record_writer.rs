@@ -20,9 +20,10 @@ use super::variable_type::VariableType;
 ///
 /// Call [`write_record`](Self::write_record) once per observation,
 /// passing a slice of [`Value`]s whose length and types match the
-/// schema. Transition via [`finish`](Self::finish) once all rows have
-/// been written — that step patches the header's N (observation
-/// count) field with the accumulated row count.
+/// schema. Transition via
+/// [`into_long_string_writer`](Self::into_long_string_writer) once all
+/// rows have been written — that step patches the header's N
+/// (observation count) field with the accumulated row count.
 #[derive(Debug)]
 pub struct AsyncRecordWriter<W> {
     state: AsyncWriterState<W>,
@@ -82,7 +83,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`] with:
+    /// Returns [`DtaError::Format`](super::dta_error::DtaError::Format) with:
     /// - [`RecordArityMismatch`](super::dta_error::FormatErrorKind::RecordArityMismatch)
     ///   if `values.len() != schema.variables().len()`.
     /// - [`RecordValueTypeMismatch`](super::dta_error::FormatErrorKind::RecordValueTypeMismatch)
@@ -123,8 +124,9 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on sink failures and
-    /// [`DtaError::Format`] with
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// sink failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format) with
     /// [`FieldTooLarge`](super::dta_error::FormatErrorKind::FieldTooLarge)
     /// if the observation count exceeds `u32::MAX` on a pre-V118 release.
     ///

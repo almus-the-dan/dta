@@ -91,7 +91,7 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format)
+    /// Returns [`DtaError::Format`]
     /// with [`CharacteristicsUnsupported`](FormatErrorKind::CharacteristicsUnsupported)
     /// if the header's release is V104 (which has no expansion-field
     /// section), [`InvalidEncoding`](FormatErrorKind::InvalidEncoding)
@@ -127,7 +127,7 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on
+    /// Returns [`DtaError::Io`] on
     /// sink failures.
     pub fn into_record_writer(mut self) -> Result<RecordWriter<W>> {
         let release = self.header.release();

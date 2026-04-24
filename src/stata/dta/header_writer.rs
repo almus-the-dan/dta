@@ -65,8 +65,8 @@ impl<W: Write + Seek> HeaderWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
-    /// sink failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
+    /// Returns [`DtaError::Io`] on
+    /// sink failures and [`DtaError::Format`]
     /// if the [`Header`] contains values the target format cannot
     /// represent (e.g., `variable_count > u16::MAX` for a release
     /// that only stores a 16-bit count).

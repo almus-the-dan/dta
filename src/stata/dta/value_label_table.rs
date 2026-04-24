@@ -17,7 +17,7 @@ const INDEX_THRESHOLD: usize = 10;
 /// [`ValueLabelReader::read_remaining_into`](crate::stata::dta::value_label_reader::ValueLabelReader::read_remaining_into)
 /// (or its async mirror), or built up by the caller. Use
 /// [`label_for`](Self::label_for) to resolve a
-/// [`Variable`](crate::stata::dta::variable::Variable) plus an integer
+/// [`Variable`] plus an integer
 /// value to the label text.
 ///
 /// # Caching
@@ -140,7 +140,7 @@ impl ValueLabelTable {
 /// Builds a first-wins `i32 → String` index from a set's entries.
 ///
 /// The first-wins approach matches the semantics of
-/// [`ValueLabelSet::label_for`](ValueLabelSet::label_for)
+/// [`ValueLabelSet::label_for`]
 /// — both paths resolve duplicate values the same way.
 fn build_index(set: &ValueLabelSet) -> HashMap<i32, String> {
     let mut index = HashMap::with_capacity(set.entries().len());

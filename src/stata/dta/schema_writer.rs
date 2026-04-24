@@ -58,8 +58,9 @@ impl<W: Write + Seek> SchemaWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on
-    /// sink failures and [`DtaError::Format`](DtaError::Format)
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// sink failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format)
     /// if the schema cannot be represented in the header's release
     /// (e.g., `strL` columns in a pre-117 format, or variable names
     /// that exceed the fixed-field width).

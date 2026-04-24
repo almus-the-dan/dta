@@ -74,11 +74,11 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format) if the set
+    /// Returns [`DtaError::Format`] if the set
     /// cannot be represented — a name or label exceeding its field
     /// width, a value outside the range supported by the release's
     /// layout, or text that cannot be encoded in the active
-    /// encoding. Returns [`DtaError::Io`](DtaError::Io) on sink
+    /// encoding. Returns [`DtaError::Io`] on sink
     /// failures.
     pub fn write_value_label_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         if self.header.release().is_xml_like() {
@@ -119,7 +119,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on sink failures while
+    /// Returns [`DtaError::Io`] on sink failures while
     /// writing the closing tags or flushing.
     pub fn finish(mut self) -> Result<W> {
         let release = self.header.release();

@@ -73,9 +73,10 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures and
-    /// [`DtaError::Format`] when the row bytes violate the DTA
-    /// format specification.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format) when
+    /// the row bytes violate the DTA format specification.
     pub async fn read_record(&mut self) -> Result<Option<Record<'_>>> {
         if !self.read_next_row().await? {
             return Ok(None);
@@ -99,7 +100,8 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures.
     pub async fn read_lazy_record(&mut self) -> Result<Option<LazyRecord<'_>>> {
         if !self.read_next_row().await? {
             return Ok(None);
@@ -119,9 +121,10 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures and
-    /// [`DtaError::Format`] if the closing `</data>` tag (XML formats)
-    /// is missing or malformed.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format) if the
+    /// closing `</data>` tag (XML formats) is missing or malformed.
     pub async fn skip_to_end(&mut self) -> Result<()> {
         if self.completed {
             return Ok(());
@@ -145,7 +148,8 @@ impl<R: AsyncRead + Unpin> AsyncRecordReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures.
     pub async fn into_long_string_reader(mut self) -> Result<AsyncLongStringReader<R>> {
         self.skip_to_end().await?;
         let reader = AsyncLongStringReader::new(self.state, self.header, self.schema);

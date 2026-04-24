@@ -52,13 +52,33 @@ reader.read_remaining_into(&mut table)?;
 #### Collecting strL payloads before writing
 
 ```rust
+use std::borrow::Cow;
+use dta::stata::dta::long_string::LongStringContent;
+
 // 0.2
 let mut table = LongStringTable::new();
 let reference = table.get_or_insert_by_content(variable, observation, data, binary);
 
-// 0.3
+// 0.3 — text via the &str ergonomic path
 let mut table = LongStringTable::for_writing();
-let reference = table.get_or_insert(variable, observation, data, binary);
+let reference = table.get_or_insert(variable, observation, "payload");
+
+// 0.3 — binary requires the explicit variant
+let reference = table.get_or_insert(
+    variable,
+    observation,
+    LongStringContent::Binary(Cow::Borrowed(&bytes)),
+);
+```
+
+#### Decoding a long string
+
+```rust
+// 0.2
+let text = table.get(&reference, encoding).and_then(|s| s.data_str());
+
+// 0.3 — encoding moves from `get`/`LongString` to `data_str`
+let text = table.get(&reference).and_then(|s| s.data_str(encoding));
 ```
 
 ## [0.2.0] - 2026-04-23

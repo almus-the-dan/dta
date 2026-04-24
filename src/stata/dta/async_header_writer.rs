@@ -64,8 +64,8 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
-    /// sink failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
+    /// Returns [`DtaError::Io`] on
+    /// sink failures and [`DtaError::Format`]
     /// if the [`Header`] contains values the target format cannot
     /// represent.
     pub async fn write_header(mut self, header: Header) -> Result<AsyncSchemaWriter<W>> {

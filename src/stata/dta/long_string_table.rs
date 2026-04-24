@@ -25,17 +25,22 @@ use std::rc::Rc;
 ///   [`LongStringRef`]s from the data section resolve via
 ///   [`get`](Self::get), so duplicate content is preserved.
 ///
-/// When writing, after writing all records and the chain has advanced to
-/// [`LongStringWriter`], iterate the table with [`iter`](Self::iter)
-/// and pass each yielded [`LongString`] to
-/// [`LongStringWriter::write_long_string`].
+/// When writing, after writing all records and the chain has advanced
+/// to [`LongStringWriter`](super::long_string_writer::LongStringWriter),
+/// iterate the table with [`iter`](Self::iter) and pass each yielded
+/// [`LongString`] to
+/// [`LongStringWriter::write_long_string`](super::long_string_writer::LongStringWriter::write_long_string).
 ///
 /// When reading, skip to the long string section and read each long
-/// string into the table using [`LongStringReader::read_remaining_into`].
-/// Then use [`LongStringReader::seek_records`] to return the beginning
-/// of the records section. As records are read, values of type
-/// [`Value::LongStringRef`] will provide the observation/variable pairs
-/// needed to look up the [`LongString`] using [`get`](Self::get).
+/// string into the table using
+/// [`LongStringReader::read_remaining_into`](super::long_string_reader::LongStringReader::read_remaining_into).
+/// Then use
+/// [`LongStringReader::seek_records`](super::long_string_reader::LongStringReader::seek_records)
+/// to return the beginning of the records section. As records are read,
+/// values of type
+/// [`Value::LongStringRef`](super::value::Value::LongStringRef) will
+/// provide the observation/variable pairs needed to look up the
+/// [`LongString`] using [`get`](Self::get).
 ///
 /// Entries are yielded in `(variable, observation)` order, matching
 /// the DTA file layout requirement for the strL section.
@@ -271,9 +276,9 @@ impl LongStringTable {
 
     /// Yields stored entries in `(variable, observation)` order,
     /// ready to be passed to
-    /// [`LongStringWriter::write_long_string`]. The returned iterator
-    /// borrows `self` and nothing else, so callers can freely invoke
-    /// `write_long_string` inside the loop.
+    /// [`LongStringWriter::write_long_string`](super::long_string_writer::LongStringWriter::write_long_string).
+    /// The returned iterator borrows `self` and nothing else, so callers
+    /// can freely invoke `write_long_string` inside the loop.
     pub fn iter(&self) -> impl Iterator<Item = LongString<'_>> + '_ {
         self.position
             .iter()

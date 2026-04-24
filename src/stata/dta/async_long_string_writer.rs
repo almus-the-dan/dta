@@ -14,8 +14,8 @@ use super::schema::Schema;
 ///
 /// Only XML formats (117+) support strLs. For earlier releases,
 /// [`write_long_string`](Self::write_long_string) returns an error
-/// and [`finish`](Self::finish) transitions without emitting any
-/// strL content.
+/// and [`into_value_label_writer`](Self::into_value_label_writer)
+/// transitions without emitting any strL content.
 #[derive(Debug)]
 pub struct AsyncLongStringWriter<W> {
     state: AsyncWriterState<W>,
@@ -79,13 +79,13 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format) with
+    /// Returns [`DtaError::Format`] with
     /// [`LongStringsUnsupported`](FormatErrorKind::LongStringsUnsupported)
     /// if the header's release is pre-V117 (no `<strls>` section),
     /// [`FieldTooLarge`](FormatErrorKind::FieldTooLarge) if the
     /// payload exceeds `u32::MAX` bytes or the observation index
     /// exceeds `u32::MAX` on a V117 file. Returns
-    /// [`DtaError::Io`](DtaError::Io) on sink failures.
+    /// [`DtaError::Io`] on sink failures.
     pub async fn write_long_string(&mut self, long_string: &LongString<'_>) -> Result<()> {
         let release = self.header.release();
         if !release.supports_long_strings() {
@@ -140,7 +140,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncLongStringWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
+    /// Returns [`DtaError::Io`] on sink failures.
     pub async fn into_value_label_writer(mut self) -> Result<AsyncValueLabelWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();

@@ -14,7 +14,7 @@ use super::value_label_reader::ValueLabelReader;
 /// Reads observation records from the data section of a DTA file.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous
-/// phases. Yields rows of [`Value`](Value) via
+/// phases. Yields rows of [`Value`](super::value::Value) via
 /// iteration, then transitions to value-label reading.
 #[derive(Debug)]
 pub struct RecordReader<R> {
@@ -126,7 +126,7 @@ impl<R: BufRead> RecordReader<R> {
     /// Skips all remaining data records without processing them.
     ///
     /// This is required before calling
-    /// [`into_value_label_reader`](Self::into_value_label_reader) on
+    /// [`into_long_string_reader`](Self::into_long_string_reader) on
     /// a non-seekable reader. All records must be consumed or skipped
     /// before transitioning to the next section.
     ///

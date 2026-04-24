@@ -60,7 +60,7 @@ impl DtaWriter {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) if
+    /// Returns [`DtaError::Io`] if
     /// the file cannot be created.
     //noinspection RsSelfConvention
     #[inline]
@@ -105,7 +105,7 @@ impl DtaWriter {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) if
+    /// Returns [`DtaError::Io`] if
     /// the file cannot be created.
     //noinspection RsSelfConvention
     #[inline]

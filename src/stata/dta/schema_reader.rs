@@ -66,9 +66,10 @@ impl<R: BufRead> SchemaReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`] on read failures and
-    /// [`DtaError::Format`] when the schema bytes violate the DTA
-    /// format specification.
+    /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
+    /// read failures and
+    /// [`DtaError::Format`](super::dta_error::DtaError::Format) when
+    /// the schema bytes violate the DTA format specification.
     pub fn read_schema(mut self) -> Result<CharacteristicReader<R>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
