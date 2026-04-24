@@ -56,10 +56,11 @@ mod tests {
     use std::borrow::Cow;
 
     use super::*;
+    use crate::stata::dta::long_string::LongStringContent;
 
     #[test]
     fn from_long_string_copies_variable_and_observation() {
-        let long_string = LongString::new(7, 42, false, Cow::Borrowed(b"hello"));
+        let long_string = LongString::new(7, 42, LongStringContent::Text(Cow::Borrowed(b"hello")));
         let long_string_ref = LongStringRef::from(&long_string);
         assert_eq!(long_string_ref.variable(), 7);
         assert_eq!(long_string_ref.observation(), 42);
@@ -67,7 +68,7 @@ mod tests {
 
     #[test]
     fn from_long_string_is_non_consuming() {
-        let long_string = LongString::new(1, 2, false, Cow::Borrowed(b"data"));
+        let long_string = LongString::new(1, 2, LongStringContent::Text(Cow::Borrowed(b"data")));
         let _ref_a = LongStringRef::from(&long_string);
         // Still usable because `From<&LongString<'_>>` borrows.
         let _ref_b = LongStringRef::from(&long_string);

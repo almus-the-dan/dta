@@ -348,6 +348,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::io::Cursor;
 
     use float_cmp::assert_approx_eq;
@@ -357,6 +358,7 @@ mod tests {
     use crate::stata::dta::dta_error::{DtaError, FormatErrorKind};
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::long_string::LongStringContent;
     use crate::stata::dta::long_string_ref::LongStringRef;
     use crate::stata::dta::long_string_table::LongStringTable;
     use crate::stata::dta::release::Release;
@@ -616,8 +618,8 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::for_writing();
-        let ref1 = table.get_or_insert(1, 1, b"hello", false);
-        let ref2 = table.get_or_insert(1, 2, b"world", false);
+        let ref1 = table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"hello")));
+        let ref2 = table.get_or_insert(1, 2, LongStringContent::Text(Cow::Borrowed(b"world")));
         let records = vec![
             vec![Value::LongStringRef(ref1)],
             vec![Value::LongStringRef(ref2)],
@@ -635,7 +637,8 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::for_writing();
-        let reference = table.get_or_insert(1, 42, b"hello", false);
+        let reference =
+            table.get_or_insert(1, 42, LongStringContent::Text(Cow::Borrowed(b"hello")));
         let records = vec![vec![Value::LongStringRef(reference)]];
         let parsed = round_trip(Release::V118, ByteOrder::LittleEndian, schema, records).await;
         assert_eq!(parsed[0][0], OwnedValue::LongStringRef(reference));
@@ -648,7 +651,8 @@ mod tests {
             .build()
             .unwrap();
         let mut table = LongStringTable::for_writing();
-        let reference = table.get_or_insert(3, 5, b"payload", false);
+        let reference =
+            table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"payload")));
         let records = vec![vec![Value::LongStringRef(reference)]];
         let parsed = round_trip(Release::V118, ByteOrder::BigEndian, schema, records).await;
         assert_eq!(parsed[0][0], OwnedValue::LongStringRef(reference));

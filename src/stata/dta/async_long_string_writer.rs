@@ -234,6 +234,7 @@ mod tests {
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::long_string::LongStringContent;
     use crate::stata::dta::release::Release;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
@@ -259,11 +260,19 @@ mod tests {
     }
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
+        LongString::new(
+            variable,
+            observation,
+            LongStringContent::Text(Cow::Borrowed(data.as_bytes())),
+        )
     }
 
     fn binary(variable: u32, observation: u64, data: &'static [u8]) -> LongString<'static> {
-        LongString::new(variable, observation, true, Cow::Borrowed(data))
+        LongString::new(
+            variable,
+            observation,
+            LongStringContent::Binary(Cow::Borrowed(data)),
+        )
     }
 
     async fn round_trip<F, Fut>(
@@ -413,10 +422,11 @@ mod tests {
     #[tokio::test]
     async fn write_long_string_table_round_trip() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"apple", false);
-        table.get_or_insert(1, 2, b"banana", false);
-        table.get_or_insert(2, 1, b"carrot", false);
-        let duplicate_ref = table.get_or_insert(99, 99, b"apple", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"apple")));
+        table.get_or_insert(1, 2, LongStringContent::Text(Cow::Borrowed(b"banana")));
+        table.get_or_insert(2, 1, LongStringContent::Text(Cow::Borrowed(b"carrot")));
+        let duplicate_ref =
+            table.get_or_insert(99, 99, LongStringContent::Text(Cow::Borrowed(b"apple")));
         assert_eq!(duplicate_ref.variable(), 1);
         assert_eq!(duplicate_ref.observation(), 1);
         assert_eq!(table.len(), 3);
@@ -506,7 +516,7 @@ mod tests {
     async fn pre_v117_rejects_write_long_string_table_with_entries() {
         let mut writer = v114_long_string_writer().await;
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"x", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"x")));
         let error = writer.write_long_string_table(&table).await.unwrap_err();
         assert!(matches!(
             error,

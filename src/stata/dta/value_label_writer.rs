@@ -304,6 +304,7 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::io::Cursor;
 
     use super::*;
@@ -311,6 +312,7 @@ mod tests {
     use crate::stata::dta::dta_error::FormatErrorKind;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::long_string::LongStringContent;
     use crate::stata::dta::release::Release;
     use crate::stata::dta::value_label::ValueLabelEntry;
     use crate::stata::dta::variable::Variable;
@@ -744,7 +746,8 @@ mod tests {
         let header = Header::builder(release, byte_order).build();
 
         let mut long_strings = LongStringTable::for_writing();
-        let ls_ref = long_strings.get_or_insert(2, 1, b"hello strL", false);
+        let ls_ref =
+            long_strings.get_or_insert(2, 1, LongStringContent::Text(Cow::Borrowed(b"hello strL")));
 
         let value_label_set =
             ValueLabelSet::new("lbl".to_owned(), entries(&[(0, "zero"), (1, "one")]));

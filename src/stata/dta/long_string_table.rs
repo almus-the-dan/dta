@@ -1,4 +1,4 @@
-use super::long_string::LongString;
+use super::long_string::{LongString, LongStringContent};
 use super::long_string_ref::LongStringRef;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -115,24 +115,31 @@ impl LongStringTable {
 
     /// Inserts the given payload, returning a [`LongStringRef`].
     ///
+    /// The `content` argument accepts anything convertible into
+    /// [`LongStringContent`] — most commonly a `&str` (which borrows
+    /// as a [`Text`](LongStringContent::Text) payload) or an explicit
+    /// [`Binary`](LongStringContent::Binary) variant.
+    ///
     /// Behavior depends on the table's mode:
     ///
     /// - **Writing** ([`for_writing`](Self::for_writing)): dedupes by
-    ///   `(data, binary)`. If the payload was already inserted, the
+    ///   `(bytes, variant)`. If the payload was already inserted, the
     ///   returned ref is the one assigned at its first insertion and
     ///   the caller's `variable`/`observation` are ignored.
     /// - **Reading** ([`for_reading`](Self::for_reading)): keys on the
     ///   caller's `(variable, observation)`. If the slot is already
     ///   occupied, the existing entry is kept (first-in wins, the new
-    ///   `data`/`binary` are discarded), and the returned ref is
-    ///   always `LongStringRef::new(variable, observation)`.
-    pub fn get_or_insert(
+    ///   content is discarded), and the returned ref is always
+    ///   `LongStringRef::new(variable, observation)`.
+    pub fn get_or_insert<'a>(
         &mut self,
         variable: u32,
         observation: u64,
-        data: &[u8],
-        binary: bool,
+        content: impl Into<LongStringContent<'a>>,
     ) -> LongStringRef {
+        let content = content.into();
+        let binary = content.is_binary();
+        let data = content.data();
         match self.mode {
             Mode::Writing => self.get_or_insert_by_content(variable, observation, data, binary),
             Mode::Reading => self.get_or_insert_by_key(variable, observation, data, binary),
@@ -244,8 +251,7 @@ impl LongStringTable {
         Some(LongString::new(
             reference.variable(),
             reference.observation(),
-            entry.binary,
-            Cow::Borrowed(&entry.data),
+            make_content(entry.binary, Cow::Borrowed(&entry.data)),
         ))
     }
 
@@ -275,10 +281,20 @@ impl LongStringTable {
                 LongString::new(
                     variable,
                     observation,
-                    entry.binary,
-                    Cow::Borrowed(&*entry.data),
+                    make_content(entry.binary, Cow::Borrowed(&*entry.data)),
                 )
             })
+    }
+}
+
+/// Reconstructs a [`LongStringContent`] from the table's internal
+/// split representation (a `binary` bool plus payload bytes).
+#[inline]
+fn make_content(binary: bool, data: Cow<'_, [u8]>) -> LongStringContent<'_> {
+    if binary {
+        LongStringContent::Binary(data)
+    } else {
+        LongStringContent::Text(data)
     }
 }
 
@@ -307,7 +323,7 @@ mod tests {
     #[test]
     fn writing_insert_new_returns_given_key() {
         let mut table = LongStringTable::for_writing();
-        let reference = table.get_or_insert(3, 5, b"hello", false);
+        let reference = table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
@@ -316,8 +332,8 @@ mod tests {
     #[test]
     fn writing_insert_duplicate_returns_original_ref() {
         let mut table = LongStringTable::for_writing();
-        let first = table.get_or_insert(3, 5, b"hello", false);
-        let second = table.get_or_insert(7, 99, b"hello", false);
+        let first = table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
+        let second = table.get_or_insert(7, 99, LongStringContent::Text(Cow::Borrowed(b"hello")));
         assert_eq!(first, second);
         assert_eq!(table.len(), 1);
     }
@@ -325,8 +341,16 @@ mod tests {
     #[test]
     fn writing_different_binary_flag_is_distinct() {
         let mut table = LongStringTable::for_writing();
-        let text_ref = table.get_or_insert(1, 1, b"\x00\x01\x02", false);
-        let binary_ref = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
+        let text_ref = table.get_or_insert(
+            1,
+            1,
+            LongStringContent::Text(Cow::Borrowed(b"\x00\x01\x02")),
+        );
+        let binary_ref = table.get_or_insert(
+            2,
+            2,
+            LongStringContent::Binary(Cow::Borrowed(b"\x00\x01\x02")),
+        );
         assert_ne!(text_ref, binary_ref);
         assert_eq!(table.len(), 2);
     }
@@ -334,9 +358,9 @@ mod tests {
     #[test]
     fn writing_distinct_payloads_are_stored_separately() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"a", false);
-        table.get_or_insert(1, 2, b"b", false);
-        table.get_or_insert(1, 3, b"c", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"a")));
+        table.get_or_insert(1, 2, LongStringContent::Text(Cow::Borrowed(b"b")));
+        table.get_or_insert(1, 3, LongStringContent::Text(Cow::Borrowed(b"c")));
         assert_eq!(table.len(), 3);
     }
 
@@ -344,7 +368,7 @@ mod tests {
     fn writing_is_empty_tracks_insertion() {
         let mut table = LongStringTable::for_writing();
         assert!(table.is_empty());
-        table.get_or_insert(1, 1, b"x", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"x")));
         assert!(!table.is_empty());
     }
 
@@ -353,7 +377,7 @@ mod tests {
     #[test]
     fn reading_insert_new_entry() {
         let mut table = LongStringTable::for_reading();
-        let reference = table.get_or_insert(3, 5, b"hello", false);
+        let reference = table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
@@ -366,8 +390,8 @@ mod tests {
         let mut table = LongStringTable::for_reading();
         // Even though the same payload could dedupe under a writing
         // table, reading mode must honor the caller's key.
-        let first = table.get_or_insert(3, 5, b"hello", false);
-        let second = table.get_or_insert(7, 9, b"hello", false);
+        let first = table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
+        let second = table.get_or_insert(7, 9, LongStringContent::Text(Cow::Borrowed(b"hello")));
         assert_eq!(first.variable(), 3);
         assert_eq!(first.observation(), 5);
         assert_eq!(second.variable(), 7);
@@ -378,9 +402,10 @@ mod tests {
     #[test]
     fn reading_is_first_wins_on_key_collision() {
         let mut table = LongStringTable::for_reading();
-        table.get_or_insert(3, 5, b"first", false);
+        table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"first")));
         // Second call on the same key with different data is a no-op.
-        let reference = table.get_or_insert(3, 5, b"second", false);
+        let reference =
+            table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"second")));
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
@@ -391,8 +416,8 @@ mod tests {
     #[test]
     fn reading_shares_payload_across_duplicate_content() {
         let mut table = LongStringTable::for_reading();
-        table.get_or_insert(3, 5, b"hello", false);
-        table.get_or_insert(7, 9, b"hello", false);
+        table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
+        table.get_or_insert(7, 9, LongStringContent::Text(Cow::Borrowed(b"hello")));
 
         // Both keys resolve to the same payload.
         let first = table.get(&LongStringRef::new(3, 5)).unwrap();
@@ -404,8 +429,16 @@ mod tests {
     #[test]
     fn reading_separates_text_and_binary() {
         let mut table = LongStringTable::for_reading();
-        let text = table.get_or_insert(1, 1, b"\x00\x01\x02", false);
-        let binary = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
+        let text = table.get_or_insert(
+            1,
+            1,
+            LongStringContent::Text(Cow::Borrowed(b"\x00\x01\x02")),
+        );
+        let binary = table.get_or_insert(
+            2,
+            2,
+            LongStringContent::Binary(Cow::Borrowed(b"\x00\x01\x02")),
+        );
         assert_ne!(text, binary);
         assert_eq!(table.len(), 2);
         assert!(!table.get(&LongStringRef::new(1, 1)).unwrap().is_binary());
@@ -417,10 +450,10 @@ mod tests {
     #[test]
     fn iter_yields_in_variable_then_observation_order() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(3, 1, b"c1", false);
-        table.get_or_insert(1, 2, b"a2", false);
-        table.get_or_insert(2, 5, b"b5", false);
-        table.get_or_insert(1, 1, b"a1", false);
+        table.get_or_insert(3, 1, LongStringContent::Text(Cow::Borrowed(b"c1")));
+        table.get_or_insert(1, 2, LongStringContent::Text(Cow::Borrowed(b"a2")));
+        table.get_or_insert(2, 5, LongStringContent::Text(Cow::Borrowed(b"b5")));
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"a1")));
 
         let ordered: Vec<(u32, u64)> = table
             .iter()
@@ -432,8 +465,8 @@ mod tests {
     #[test]
     fn iter_preserves_data_and_binary_flag() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"text", false);
-        table.get_or_insert(2, 2, b"\x00\x01", true);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"text")));
+        table.get_or_insert(2, 2, LongStringContent::Binary(Cow::Borrowed(b"\x00\x01")));
 
         let long_strings: Vec<_> = table.iter().collect();
         assert_eq!(long_strings[0].data(), b"text");
@@ -447,7 +480,7 @@ mod tests {
     #[test]
     fn remove_removes_existing_entry() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(3, 5, b"hello", false);
+        table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
         let reference = LongStringRef::new(3, 5);
 
         assert!(table.remove(&reference));
@@ -458,7 +491,7 @@ mod tests {
     #[test]
     fn remove_returns_false_for_missing_entry() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"present", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"present")));
 
         let missing = LongStringRef::new(99, 99);
         assert!(!table.remove(&missing));
@@ -468,12 +501,12 @@ mod tests {
     #[test]
     fn remove_clears_content_pointer_when_canonical() {
         let mut table = LongStringTable::for_writing();
-        let reference = table.get_or_insert(3, 5, b"hello", false);
+        let reference = table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
         table.remove(&reference);
 
         // After removal, a fresh insert must be able to assign its
         // own key rather than point back at the gone entry.
-        let fresh = table.get_or_insert(7, 9, b"hello", false);
+        let fresh = table.get_or_insert(7, 9, LongStringContent::Text(Cow::Borrowed(b"hello")));
         assert_eq!(fresh.variable(), 7);
         assert_eq!(fresh.observation(), 9);
     }
@@ -481,8 +514,8 @@ mod tests {
     #[test]
     fn remove_text_and_binary_tables_are_independent() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"data", false);
-        table.get_or_insert(2, 2, b"data", true);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"data")));
+        table.get_or_insert(2, 2, LongStringContent::Binary(Cow::Borrowed(b"data")));
 
         assert!(table.remove(&LongStringRef::new(1, 1)));
         assert_eq!(table.len(), 1);
@@ -497,7 +530,7 @@ mod tests {
     #[test]
     fn get_returns_stored_entry_by_ref() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(3, 5, b"hello", false);
+        table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"hello")));
 
         let reference = LongStringRef::new(3, 5);
         let long_string = table.get(&reference).unwrap();
@@ -510,7 +543,7 @@ mod tests {
     #[test]
     fn get_returns_none_for_missing_ref() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"only", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"only")));
 
         let missing = LongStringRef::new(99, 99);
         assert!(table.get(&missing).is_none());
@@ -519,7 +552,11 @@ mod tests {
     #[test]
     fn get_preserves_binary_flag() {
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(2, 2, b"\x00\x01\x02", true);
+        table.get_or_insert(
+            2,
+            2,
+            LongStringContent::Binary(Cow::Borrowed(b"\x00\x01\x02")),
+        );
 
         let reference = LongStringRef::new(2, 2);
         let long_string = table.get(&reference).unwrap();
@@ -531,7 +568,7 @@ mod tests {
     fn data_str_uses_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"\x80", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"\x80")));
 
         let reference = LongStringRef::new(1, 1);
         let decoded = table
@@ -549,7 +586,7 @@ mod tests {
     fn iter_decoding_uses_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"\x80", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"\x80")));
 
         let decoded = table
             .iter()

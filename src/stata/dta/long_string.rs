@@ -45,6 +45,59 @@ impl GsoType {
     }
 }
 
+/// Payload of a long-string entry — either a text blob (to be
+/// decoded with the file's encoding) or raw binary bytes.
+///
+/// Both variants wrap `Cow<'a, [u8]>` so the data can be borrowed
+/// directly from a reader's buffer on the happy path. Use the
+/// [`From<&str>`](#impl-From<%26str>-for-LongStringContent<'a>) impl
+/// for ergonomic text construction; binary payloads need the
+/// explicit `Binary(...)` variant to avoid silently classifying
+/// arbitrary byte slices as binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LongStringContent<'a> {
+    /// Text payload (GSO type `0x82`). Decode with
+    /// [`LongString::data_str`] and the file's encoding.
+    Text(Cow<'a, [u8]>),
+    /// Binary payload (GSO type `0x81`). Treat as opaque bytes.
+    Binary(Cow<'a, [u8]>),
+}
+
+impl LongStringContent<'_> {
+    /// Raw bytes, regardless of variant.
+    #[must_use]
+    #[inline]
+    pub fn data(&self) -> &[u8] {
+        match self {
+            Self::Text(data) | Self::Binary(data) => data,
+        }
+    }
+
+    /// `true` when this is a [`Text`](Self::Text) payload.
+    #[must_use]
+    #[inline]
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text(_))
+    }
+
+    /// `true` when this is a [`Binary`](Self::Binary) payload.
+    #[must_use]
+    #[inline]
+    pub fn is_binary(&self) -> bool {
+        matches!(self, Self::Binary(_))
+    }
+}
+
+impl<'a> From<&'a str> for LongStringContent<'a> {
+    /// Borrows the string's UTF-8 bytes as a [`Text`](Self::Text)
+    /// payload. No `From<&[u8]>` is provided — binary payloads must
+    /// be constructed explicitly so that arbitrary byte slices
+    /// aren't silently misclassified.
+    fn from(s: &'a str) -> Self {
+        Self::Text(Cow::Borrowed(s.as_bytes()))
+    }
+}
+
 /// A long string (strL / GSO) entry from the DTA file.
 ///
 /// Each entry is keyed by a `(variable, observation)` pair,
@@ -53,27 +106,26 @@ impl GsoType {
 /// one-based index of the first observation where the string content
 /// appeared, serving as a deduplication key rather than a row address.
 ///
-/// The raw bytes are stored as-is from the file. Use [`data`](Self::data)
-/// for raw access or [`data_str`](Self::data_str) to decode using a
-/// caller-supplied encoding — typically the one reported by the
-/// reader that produced this entry (see the `encoding()` accessor on
-/// each reader).
+/// The payload is held as a [`LongStringContent`] so the
+/// text-vs-binary distinction is encoded in the type. Use
+/// [`data`](Self::data) for raw byte access regardless of variant,
+/// [`content`](Self::content) to match on the variant, or
+/// [`data_str`](Self::data_str) to decode text payloads with a
+/// caller-supplied encoding.
 #[derive(Debug, Clone)]
 pub struct LongString<'a> {
     variable: u32,
     observation: u64,
-    binary: bool,
-    data: Cow<'a, [u8]>,
+    content: LongStringContent<'a>,
 }
 
 impl<'a> LongString<'a> {
     #[must_use]
-    pub(crate) fn new(variable: u32, observation: u64, binary: bool, data: Cow<'a, [u8]>) -> Self {
+    pub(crate) fn new(variable: u32, observation: u64, content: LongStringContent<'a>) -> Self {
         Self {
             variable,
             observation,
-            binary,
-            data,
+            content,
         }
     }
 
@@ -93,33 +145,59 @@ impl<'a> LongString<'a> {
         self.observation
     }
 
-    /// Whether this entry was stored as binary (GSO type `0x81`)
-    /// rather than ASCII text (`0x82`). Binary entries typically
-    /// cannot be decoded as strings via [`data_str`](Self::data_str).
+    /// The payload, as a [`LongStringContent`] enum exposing both
+    /// the text/binary tag and the underlying bytes.
+    #[must_use]
+    #[inline]
+    pub fn content(&self) -> &LongStringContent<'a> {
+        &self.content
+    }
+
+    /// Consumes the entry and returns its [`LongStringContent`],
+    /// avoiding a clone when the caller no longer needs the
+    /// surrounding variable/observation metadata.
+    #[must_use]
+    #[inline]
+    pub fn into_content(self) -> LongStringContent<'a> {
+        self.content
+    }
+
+    /// `true` when this entry's payload is text (GSO type `0x82`).
+    #[must_use]
+    #[inline]
+    pub fn is_text(&self) -> bool {
+        self.content.is_text()
+    }
+
+    /// `true` when this entry's payload is binary (GSO type `0x81`).
+    /// Binary entries typically cannot be decoded as strings via
+    /// [`data_str`](Self::data_str).
     #[must_use]
     #[inline]
     pub fn is_binary(&self) -> bool {
-        self.binary
+        self.content.is_binary()
     }
 
     /// The raw bytes from the GSO entry, without any decoding or
-    /// null-terminator stripping.
+    /// null-terminator stripping — identical to
+    /// `self.content().data()`.
     #[must_use]
     #[inline]
     pub fn data(&self) -> &[u8] {
-        &self.data
+        self.content.data()
     }
 
     /// Decodes the entry as a string using the given encoding,
     /// stripping any trailing null terminator.
     ///
     /// Pass the encoding reported by the reader (or writer) that
-    /// produced this entry — for example `reader.encoding()`.
+    /// produced this entry — for example, `reader.encoding()`.
     ///
     /// Returns `None` if the bytes are not valid in the given
-    /// encoding.
+    /// encoding. Meaningful primarily for [`Text`](LongStringContent::Text)
+    /// payloads; binary data will typically return `None` or garbage.
     #[must_use]
     pub fn data_str(&self, encoding: &'static Encoding) -> Option<Cow<'_, str>> {
-        decode_null_terminated(&self.data, encoding)
+        decode_null_terminated(self.content.data(), encoding)
     }
 }

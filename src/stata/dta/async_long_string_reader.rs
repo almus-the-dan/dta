@@ -7,7 +7,7 @@ use super::async_value_label_reader::AsyncValueLabelReader;
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
 use super::header::Header;
-use super::long_string::LongString;
+use super::long_string::{LongString, LongStringContent};
 use super::long_string_parse::{
     GSO_SECTION_CLOSE_REST, GsoHeader, GsoTag, classify_gso_tag, long_string_data_len_to_usize,
 };
@@ -90,12 +90,12 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             .read_exact(gso_header.data_len, Section::LongStrings)
             .await?;
 
-        let long_string = LongString::new(
-            gso_header.variable,
-            gso_header.observation,
-            gso_header.is_binary(),
-            Cow::Borrowed(data),
-        );
+        let content = if gso_header.is_binary() {
+            LongStringContent::Binary(Cow::Borrowed(data))
+        } else {
+            LongStringContent::Text(Cow::Borrowed(data))
+        };
+        let long_string = LongString::new(gso_header.variable, gso_header.observation, content);
         Ok(Some(long_string))
     }
 
@@ -125,12 +125,9 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
     /// format specification.
     pub async fn read_remaining_into(&mut self, table: &mut LongStringTable) -> Result<()> {
         while let Some(long_string) = self.read_long_string().await? {
-            table.get_or_insert(
-                long_string.variable(),
-                long_string.observation(),
-                long_string.data(),
-                long_string.is_binary(),
-            );
+            let variable = long_string.variable();
+            let observation = long_string.observation();
+            table.get_or_insert(variable, observation, long_string.into_content());
         }
         Ok(())
     }
@@ -274,7 +271,11 @@ mod tests {
     use crate::stata::dta::variable_type::VariableType;
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
+        LongString::new(
+            variable,
+            observation,
+            LongStringContent::Text(Cow::Borrowed(data.as_bytes())),
+        )
     }
 
     async fn read_one(

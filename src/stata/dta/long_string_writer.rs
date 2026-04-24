@@ -227,6 +227,7 @@ mod tests {
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
+    use crate::stata::dta::long_string::LongStringContent;
     use crate::stata::dta::release::Release;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
@@ -307,11 +308,19 @@ mod tests {
     }
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
+        LongString::new(
+            variable,
+            observation,
+            LongStringContent::Text(Cow::Borrowed(data.as_bytes())),
+        )
     }
 
     fn binary(variable: u32, observation: u64, data: &'static [u8]) -> LongString<'static> {
-        LongString::new(variable, observation, true, Cow::Borrowed(data))
+        LongString::new(
+            variable,
+            observation,
+            LongStringContent::Binary(Cow::Borrowed(data)),
+        )
     }
 
     // -- V117 round-trips ---------------------------------------------------
@@ -396,12 +405,14 @@ mod tests {
 
     #[test]
     fn write_long_string_table_round_trip() {
+        // Passes `&str` directly — `From<&str> for LongStringContent`
+        // wraps it as a `Text` variant.
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"apple", false);
-        table.get_or_insert(1, 2, b"banana", false);
-        table.get_or_insert(2, 1, b"carrot", false);
+        table.get_or_insert(1, 1, "apple");
+        table.get_or_insert(1, 2, "banana");
+        table.get_or_insert(2, 1, "carrot");
         // Duplicate payload must not produce a second entry.
-        let duplicate_ref = table.get_or_insert(99, 99, b"apple", false);
+        let duplicate_ref = table.get_or_insert(99, 99, "apple");
         assert_eq!(duplicate_ref.variable(), 1);
         assert_eq!(duplicate_ref.observation(), 1);
         assert_eq!(table.len(), 3);
@@ -478,7 +489,7 @@ mod tests {
     fn pre_v117_rejects_write_long_string_table_with_entries() {
         let mut writer = v114_long_string_writer();
         let mut table = LongStringTable::for_writing();
-        table.get_or_insert(1, 1, b"x", false);
+        table.get_or_insert(1, 1, LongStringContent::Text(Cow::Borrowed(b"x")));
         let error = writer.write_long_string_table(&table).unwrap_err();
         assert!(matches!(
             error,
