@@ -17,10 +17,9 @@ fn read_auto_dta_section_counts() {
 
     // Characteristics
     let mut characteristic_count = 0;
-    while characteristic_reader
+    while let Some(_characteristic) = characteristic_reader
         .read_characteristic()
         .expect("failed to read characteristic")
-        .is_some()
     {
         characteristic_count += 1;
     }
@@ -32,11 +31,7 @@ fn read_auto_dta_section_counts() {
 
     // Records
     let mut record_count = 0u64;
-    while record_reader
-        .read_record()
-        .expect("failed to read record")
-        .is_some()
-    {
+    while let Some(_record) = record_reader.read_record().expect("failed to read record") {
         record_count += 1;
     }
     assert_eq!(record_count, 74);
@@ -47,10 +42,9 @@ fn read_auto_dta_section_counts() {
         .expect("failed to transition to long string reader");
 
     let mut long_string_count = 0;
-    while long_string_reader
+    while let Some(_long_string) = long_string_reader
         .read_long_string()
         .expect("failed to read long string")
-        .is_some()
     {
         long_string_count += 1;
     }
@@ -62,10 +56,9 @@ fn read_auto_dta_section_counts() {
         .expect("failed to transition to value label reader");
 
     let mut value_label_set_count = 0;
-    while value_label_reader
+    while let Some(_value_label_set) = value_label_reader
         .read_value_label_set()
         .expect("failed to read value label set")
-        .is_some()
     {
         value_label_set_count += 1;
     }
