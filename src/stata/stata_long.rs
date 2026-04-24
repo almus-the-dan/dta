@@ -97,6 +97,18 @@ impl StataLong {
             }
         }
     }
+
+    /// Returns the underlying `i32` when this value is
+    /// [`Present`](Self::Present), or `None` when it is
+    /// [`Missing`](Self::Missing).
+    #[must_use]
+    #[inline]
+    pub fn present(self) -> Option<i32> {
+        match self {
+            Self::Present(v) => Some(v),
+            Self::Missing(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -314,5 +326,20 @@ mod tests {
             StataLong::Missing(MissingValue::Z).to_raw(Release::V112),
             Err(StataError::TaggedMissingUnsupported),
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // present()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn present_returns_inner_for_present() {
+        assert_eq!(StataLong::Present(100_000).present(), Some(100_000));
+    }
+
+    #[test]
+    fn present_returns_none_for_missing() {
+        assert_eq!(StataLong::Missing(MissingValue::System).present(), None);
+        assert_eq!(StataLong::Missing(MissingValue::A).present(), None);
     }
 }

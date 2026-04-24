@@ -1,6 +1,5 @@
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::rc::Rc;
 
 use super::value_label::ValueLabelSet;

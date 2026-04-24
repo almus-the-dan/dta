@@ -95,6 +95,18 @@ impl StataInt {
             }
         }
     }
+
+    /// Returns the underlying `i16` when this value is
+    /// [`Present`](Self::Present), or `None` when it is
+    /// [`Missing`](Self::Missing).
+    #[must_use]
+    #[inline]
+    pub fn present(self) -> Option<i16> {
+        match self {
+            Self::Present(v) => Some(v),
+            Self::Missing(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +321,20 @@ mod tests {
             StataInt::Missing(MissingValue::Z).to_raw(Release::V112),
             Err(StataError::TaggedMissingUnsupported),
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // present()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn present_returns_inner_for_present() {
+        assert_eq!(StataInt::Present(1234).present(), Some(1234));
+    }
+
+    #[test]
+    fn present_returns_none_for_missing() {
+        assert_eq!(StataInt::Missing(MissingValue::System).present(), None);
+        assert_eq!(StataInt::Missing(MissingValue::A).present(), None);
     }
 }

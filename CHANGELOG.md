@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-04-24
 
+### Added
+
+- `StataByte::present`, `StataInt::present`, `StataLong::present`, `StataFloat::present`, and `StataDouble::present` return `Some(T)` for a present value and `None` for any missing variant, letting callers elide the `match` when they only care about the underlying scalar.
+
 ### Changed
 
 - **Breaking:** `LongStringTable` now requires the caller to declare whether the table is being populated while reading a file or while preparing one for writing. Construct with `LongStringTable::for_reading()` or `LongStringTable::for_writing()` in place of `LongStringTable::new()` / `LongStringTable::default()`. The mode fixes how `get_or_insert` behaves: a writing table dedupes by payload bytes, while a reading table preserves the caller's `(variable, observation)` key.

@@ -134,6 +134,18 @@ impl StataDouble {
             }
         }
     }
+
+    /// Returns the underlying `f64` when this value is
+    /// [`Present`](Self::Present), or `None` when it is
+    /// [`Missing`](Self::Missing).
+    #[must_use]
+    #[inline]
+    pub fn present(self) -> Option<f64> {
+        match self {
+            Self::Present(v) => Some(v),
+            Self::Missing(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -461,5 +473,20 @@ mod tests {
             StataDouble::Missing(MissingValue::Z).to_raw(Release::V112),
             Err(StataError::TaggedMissingUnsupported),
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // present()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn present_returns_inner_for_present() {
+        assert_eq!(StataDouble::Present(3.14).present(), Some(3.14));
+    }
+
+    #[test]
+    fn present_returns_none_for_missing() {
+        assert_eq!(StataDouble::Missing(MissingValue::System).present(), None);
+        assert_eq!(StataDouble::Missing(MissingValue::A).present(), None);
     }
 }
