@@ -197,6 +197,7 @@ impl<'a> LongString<'a> {
     /// encoding. Meaningful primarily for [`Text`](LongStringContent::Text)
     /// payloads; binary data will typically return `None` or garbage.
     #[must_use]
+    #[inline]
     pub fn data_str(&self, encoding: &'static Encoding) -> Option<Cow<'_, str>> {
         decode_null_terminated(self.content.data(), encoding)
     }
