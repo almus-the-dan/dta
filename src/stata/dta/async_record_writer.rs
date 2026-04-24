@@ -60,6 +60,17 @@ impl<W> AsyncRecordWriter<W> {
     pub fn schema(&self) -> &Schema {
         &self.schema
     }
+
+    /// The encoding this writer uses to encode string fields.
+    ///
+    /// Defaults to Windows-1252 for pre-V118 releases and UTF-8 for
+    /// V118+, overridable via
+    /// [`DtaWriter::encoding`](super::dta_writer::DtaWriter::encoding).
+    #[must_use]
+    #[inline]
+    pub fn encoding(&self) -> &'static encoding_rs::Encoding {
+        self.state.encoding()
+    }
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncRecordWriter<W> {

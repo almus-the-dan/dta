@@ -36,6 +36,19 @@ impl<W> AsyncHeaderWriter<W> {
             encoding_override: encoding,
         }
     }
+
+    /// The encoding override passed to
+    /// [`DtaWriter::encoding`](super::dta_writer::DtaWriter::encoding),
+    /// if any. When `None`, the writer picks the release-appropriate
+    /// default (Windows-1252 for pre-V118, UTF-8 for V118+) once
+    /// [`write_header`](Self::write_header) resolves the format
+    /// version. The resolved encoding is available on every
+    /// downstream writer via `encoding()`.
+    #[must_use]
+    #[inline]
+    pub fn encoding_override(&self) -> Option<&'static Encoding> {
+        self.encoding_override
+    }
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {

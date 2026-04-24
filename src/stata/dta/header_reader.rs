@@ -41,6 +41,19 @@ impl<R> HeaderReader<R> {
             encoding_override: encoding,
         }
     }
+
+    /// The encoding override passed to
+    /// [`DtaReader::encoding`](super::dta_reader::DtaReader::encoding),
+    /// if any. When `None`, the reader picks the release-appropriate
+    /// default (Windows-1252 for pre-V118, UTF-8 for V118+) once
+    /// [`read_header`](Self::read_header) determines the format
+    /// version. The resolved encoding is available on every downstream
+    /// reader via `encoding()`.
+    #[must_use]
+    #[inline]
+    pub fn encoding_override(&self) -> Option<&'static Encoding> {
+        self.encoding_override
+    }
 }
 
 impl<R: BufRead + Seek> HeaderReader<R> {

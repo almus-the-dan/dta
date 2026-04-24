@@ -56,6 +56,17 @@ impl<W> AsyncCharacteristicWriter<W> {
         &self.schema
     }
 
+    /// The encoding this writer uses to encode string fields.
+    ///
+    /// Defaults to Windows-1252 for pre-V118 releases and UTF-8 for
+    /// V118+, overridable via
+    /// [`DtaWriter::encoding`](super::dta_writer::DtaWriter::encoding).
+    #[must_use]
+    #[inline]
+    pub fn encoding(&self) -> &'static encoding_rs::Encoding {
+        self.state.encoding()
+    }
+
     /// Consumes the writer and returns the underlying sink. Used
     /// exclusively by `async_characteristic_reader` tests that need a
     /// partially written file — they drive the writer up through
