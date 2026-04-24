@@ -7,10 +7,10 @@ use super::long_string_reader::LongStringReader;
 use super::reader_state::ReaderState;
 use super::record_reader::RecordReader;
 use super::schema::Schema;
-use super::value_label::{ValueLabelEntry, ValueLabelSet};
+use super::value_label::ValueLabelSet;
 use super::value_label_parse::{
-    VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, entry_index_to_i32,
-    overflow_error, parse_modern_payload,
+    OLD_VALUE_LABEL_SIZE, VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag,
+    overflow_error, parse_modern_payload, parse_old_payload,
 };
 use super::value_label_table::ValueLabelTable;
 
@@ -162,59 +162,66 @@ impl<R: BufRead> ValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Old value labels (format 104)
+// Old value labels (format 104-107)
 // ---------------------------------------------------------------------------
+//
+// Pre-V108 sets have the layout:
+//   u16 n          — entry count
+//   char[9] name
+//   byte pad
+//   u16[n] values  — little-/big-endian per the file's byte order
+//   char[8][n]     — fixed-width, null-padded labels
+//
+// Values round-trip through `i16` so negative codings survive.
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads and parses one set in the old (pre-105) layout.
+    /// Reads and parses one set in the old (V104-V107) layout.
     fn read_old_set(&mut self) -> Result<Option<ValueLabelSet>> {
-        let Some(set_len) = self.read_old_set_header()? else {
+        let Some(entry_count) = self.read_old_entry_count()? else {
             return Ok(None);
         };
 
         let name = self.read_set_name()?;
+        let byte_order = self.header.byte_order();
         let encoding = self.state.encoding();
 
-        let entry_count = set_len / 8;
-        let payload = self.state.read_exact(set_len, Section::ValueLabels)?;
-
-        let mut entries = Vec::with_capacity(entry_count);
-        for entry_index in 0..entry_count {
-            let label_bytes = &payload[8 * entry_index..8 * entry_index + 8];
-            if label_bytes[0] == 0 {
-                continue;
-            }
-            let label = decode_label(label_bytes, 8, encoding)?;
-            let value = entry_index_to_i32(entry_index)?;
-            let entry = ValueLabelEntry::new(value, label);
-            entries.push(entry);
-        }
-
-        let set = ValueLabelSet::new(name, entries);
+        let payload_len = old_payload_len(entry_count)?;
+        let payload = self.state.read_exact(payload_len, Section::ValueLabels)?;
+        let set = parse_old_payload(payload, byte_order, encoding, &name)?;
         Ok(Some(set))
     }
 
-    /// Reads the old-format table header (table length, name, padding).
-    /// Returns the payload size in bytes, or `None` at EOF.
-    fn read_old_set_header(&mut self) -> Result<Option<usize>> {
+    /// Reads the leading `u16` entry count, or returns `None` at a
+    /// clean EOF.
+    fn read_old_entry_count(&mut self) -> Result<Option<usize>> {
         let byte_order = self.header.byte_order();
-        let Some(set_len) = self.state.try_read_u16(byte_order, Section::ValueLabels)? else {
+        let Some(entry_count) = self.state.try_read_u16(byte_order, Section::ValueLabels)? else {
             self.completed = true;
             return Ok(None);
         };
-        let set_len = usize::from(set_len);
-        Ok(Some(set_len))
+        Ok(Some(usize::from(entry_count)))
     }
 
     /// Skips one old-format set. Returns `false` at EOF.
     fn skip_old_set(&mut self) -> Result<bool> {
-        let Some(set_len) = self.read_old_set_header()? else {
+        let Some(entry_count) = self.read_old_entry_count()? else {
             return Ok(false);
         };
         self.skip_set_name()?;
-        self.state.skip(set_len, Section::ValueLabels)?;
+        let payload_len = old_payload_len(entry_count)?;
+        self.state.skip(payload_len, Section::ValueLabels)?;
         Ok(true)
     }
+}
+
+/// Computes the byte length of a pre-V108 payload: `entry_count × (2
+/// value bytes + 8 label bytes)`. Overflow escalates to the shared
+/// value-label overflow error — unreachable on 64-bit platforms but
+/// real on 16-bit targets.
+fn old_payload_len(entry_count: usize) -> Result<usize> {
+    entry_count
+        .checked_mul(2 + OLD_VALUE_LABEL_SIZE)
+        .ok_or_else(overflow_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +411,7 @@ mod tests {
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;
+    use crate::stata::dta::value_label::ValueLabelEntry;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
 

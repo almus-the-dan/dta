@@ -4,10 +4,10 @@ use super::async_reader_state::AsyncReaderState;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::header::Header;
 use super::schema::Schema;
-use super::value_label::{ValueLabelEntry, ValueLabelSet};
+use super::value_label::ValueLabelSet;
 use super::value_label_parse::{
-    VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag, decode_label, entry_index_to_i32,
-    overflow_error, parse_modern_payload,
+    OLD_VALUE_LABEL_SIZE, VALUE_LABELS_CLOSE_REST, XmlLabelTag, classify_xml_label_tag,
+    overflow_error, parse_modern_payload, parse_old_payload,
 };
 use super::value_label_table::ValueLabelTable;
 
@@ -162,59 +162,63 @@ impl<R: AsyncRead + Unpin> AsyncValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Old value labels (format 104)
+// Old value labels (format 104-107)
 // ---------------------------------------------------------------------------
+//
+// Pre-V108 sets have the layout:
+//   u16 n          — entry count
+//   char[9] name
+//   byte pad
+//   u16[n] values  — little-/big-endian per the file's byte order
+//   char[8][n]     — fixed-width, null-padded labels
 
 impl<R: AsyncRead + Unpin> AsyncValueLabelReader<R> {
     async fn read_old_set(&mut self) -> Result<Option<ValueLabelSet>> {
-        let Some(set_len) = self.read_old_set_header().await? else {
+        let Some(entry_count) = self.read_old_entry_count().await? else {
             return Ok(None);
         };
 
         let name = self.read_set_name().await?;
+        let byte_order = self.header.byte_order();
         let encoding = self.state.encoding();
 
-        let entry_count = set_len / 8;
-        let payload = self.state.read_exact(set_len, Section::ValueLabels).await?;
-
-        let mut entries = Vec::with_capacity(entry_count);
-        for entry_index in 0..entry_count {
-            let label_bytes = &payload[8 * entry_index..8 * entry_index + 8];
-            if label_bytes[0] == 0 {
-                continue;
-            }
-            let label = decode_label(label_bytes, 8, encoding)?;
-            let value = entry_index_to_i32(entry_index)?;
-            let entry = ValueLabelEntry::new(value, label);
-            entries.push(entry);
-        }
-
-        let set = ValueLabelSet::new(name, entries);
+        let payload_len = old_payload_len(entry_count)?;
+        let payload = self
+            .state
+            .read_exact(payload_len, Section::ValueLabels)
+            .await?;
+        let set = parse_old_payload(payload, byte_order, encoding, &name)?;
         Ok(Some(set))
     }
 
-    async fn read_old_set_header(&mut self) -> Result<Option<usize>> {
+    async fn read_old_entry_count(&mut self) -> Result<Option<usize>> {
         let byte_order = self.header.byte_order();
-        let set_len = self
+        let entry_count = self
             .state
             .try_read_u16(byte_order, Section::ValueLabels)
             .await?;
-        let Some(set_len) = set_len else {
+        let Some(entry_count) = entry_count else {
             self.completed = true;
             return Ok(None);
         };
-        let set_len = usize::from(set_len);
-        Ok(Some(set_len))
+        Ok(Some(usize::from(entry_count)))
     }
 
     async fn skip_old_set(&mut self) -> Result<bool> {
-        let Some(set_len) = self.read_old_set_header().await? else {
+        let Some(entry_count) = self.read_old_entry_count().await? else {
             return Ok(false);
         };
         self.skip_set_name().await?;
-        self.state.skip(set_len, Section::ValueLabels).await?;
+        let payload_len = old_payload_len(entry_count)?;
+        self.state.skip(payload_len, Section::ValueLabels).await?;
         Ok(true)
     }
+}
+
+fn old_payload_len(entry_count: usize) -> Result<usize> {
+    entry_count
+        .checked_mul(2 + OLD_VALUE_LABEL_SIZE)
+        .ok_or_else(overflow_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +331,7 @@ mod tests {
     use crate::stata::dta::dta_reader::DtaReader;
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::release::Release;
+    use crate::stata::dta::value_label::ValueLabelEntry;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
 

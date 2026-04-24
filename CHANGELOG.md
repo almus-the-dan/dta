@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `LongStringTable::get_or_insert_by_content` and `get_or_insert_by_key` are replaced by a single `get_or_insert(variable, observation, data, binary)` that dispatches on the table's mode.
 - **Breaking:** `Release::supports_tagged_missing` and `Release::uses_magic_double_missing` are now crate-private. They were inadvertently published in 0.2.0; the release-gating they describe is an internal encoding concern.
 - **Breaking:** The public error enums `DtaError`, `FormatErrorKind`, `Section`, `Field`, `Tag`, and `StataError` are now `#[non_exhaustive]`. Downstream `match` expressions on any of these must include a wildcard arm. Future releases can then add new variants (new sections, new format violations, new tagged missings) without breaking the public API.
+- **Breaking:** Pre-V108 value-label sets now round-trip the real Stata layout — `u16 n` + 9-byte name + 1-byte pad + `u16` values + 8-byte fixed-width labels — across V104, V105, V106, and V107. V104 files written by other tools now round-trip; files written by `dta` 0.2.0 with a V104 header are *not* readable by 0.3.0, since 0.2.0 used a self-consistent slot-indexed format that no other tool produces.
+- **Breaking:** `FormatErrorKind::OldValueLabelValueOutOfRange` now fires on values outside `i16` range (`-32768..=32767`). The old bound (`0..=8190`, the V104 slot-table maximum) no longer applies. Negative values and values up to 32767 are valid in pre-V108 sets, and duplicates are preserved in order.
+
+### Fixed
+
+- Reading a real Stata or pandas V105-V107 file no longer fails with `DtaError::Io { section: ValueLabels, source: UnexpectedEof }`. 0.2.0 routed V105-V107 through the V108+ "modern" value-label path, which reads a `u32` length where the file stores a `u16`; the first length read then asked for gigabytes of payload from an 84-byte section. Pre-V108 files now follow the correct `u16 n` layout (see the related entry under "Changed").
 
 ### Removed
 

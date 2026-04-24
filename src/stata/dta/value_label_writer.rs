@@ -5,9 +5,10 @@ use super::header::Header;
 use super::schema::Schema;
 use super::value_label::ValueLabelSet;
 use super::value_label_format::{
-    build_modern_text_payload, build_old_slot_table, modern_payload_bytes,
-    narrow_entry_count_to_u32, narrow_slot_count_to_table_len,
+    build_modern_text_payload, encode_old_entries, modern_payload_bytes, narrow_entry_count_to_u32,
+    narrow_old_entry_count_to_u16,
 };
+use super::value_label_parse::OLD_VALUE_LABEL_SIZE;
 use super::value_label_table::ValueLabelTable;
 use super::writer_state::WriterState;
 
@@ -153,43 +154,51 @@ impl<W: Write + Seek> ValueLabelWriter<W> {
 }
 
 impl<W: Write + Seek> ValueLabelWriter<W> {
-    /// Writes one set in the V104 legacy layout:
+    /// Writes one set in the V104-V107 legacy layout:
     ///
-    /// - `table_len`: `u16` = `slot_count * 8`
-    /// - `name`: fixed-width + 2-byte padding
-    /// - `payload`: `slot_count × 8` bytes, one slot per index.
+    /// - `n`: `u16` — entry count
+    /// - `name`: fixed-width 9 bytes + 1-byte padding
+    /// - `values`: `u16[n]` — the `i16` encoding of each entry's value
+    /// - `labels`: `char[8][n]` — null-padded labels, 8 bytes each
     ///
-    /// Each slot holds a null-padded label (8 bytes max). Empty slots
-    /// indicate no entry for that index. The caller's values must
-    /// therefore be non-negative and ≤ `u16::MAX / 8` (= 8190);
-    /// duplicate values are rejected.
+    /// Each entry's value must fit in `i16` (-32768..=32767), and each
+    /// label must encode in 8 bytes or fewer.
     fn write_old_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
 
-        let slots = build_old_slot_table(set, self.state.encoding(), position_before)?;
-        let set_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
+        let encoded_labels = encode_old_entries(set, self.state.encoding(), position_before)?;
+        let entry_count = narrow_old_entry_count_to_u16(encoded_labels.len(), position_before)?;
 
         self.state
-            .write_u16(set_len_u16, byte_order, Section::ValueLabels)?;
+            .write_u16(entry_count, byte_order, Section::ValueLabels)?;
         self.state.write_fixed_string(
             set.name(),
             release.value_label_name_len(),
             Section::ValueLabels,
             Field::ValueLabelName,
         )?;
-        // V104 padding is 2 bytes of zeros.
+        // Pre-V108 padding after the name is 1 byte of zeros.
         self.state.write_padded_bytes(
             &[],
             release.value_label_table_padding_len(),
             Section::ValueLabels,
         )?;
 
-        for slot in &slots {
-            let bytes = slot.as_deref().unwrap_or_default();
+        // Values as `u16` (round-tripped through `i16` so the negative
+        // range survives). `encode_old_entries` already checked the
+        // range, so the cast can't truncate.
+        for entry in set.entries() {
+            let signed = i16::try_from(entry.value())
+                .expect("encode_old_entries verified the value fits in i16");
             self.state
-                .write_padded_bytes(bytes, 8, Section::ValueLabels)?;
+                .write_u16(signed.cast_unsigned(), byte_order, Section::ValueLabels)?;
+        }
+
+        for label in &encoded_labels {
+            self.state
+                .write_padded_bytes(label, OLD_VALUE_LABEL_SIZE, Section::ValueLabels)?;
         }
         Ok(())
     }
@@ -512,31 +521,44 @@ mod tests {
         assert_eq!(sets[0].entries()[0].label(), "hundred");
     }
 
-    // -- V104 legacy layout -------------------------------------------------
+    // -- V104-V107 legacy layout --------------------------------------------
 
     #[test]
     fn v104_single_set_round_trip() {
-        // V104 uses entry index as value. Values must be 0..8190.
-        let set = ValueLabelSet::new("old".to_owned(), entries(&[(0, "zero"), (2, "two")]));
+        let set = ValueLabelSet::new(
+            "old".to_owned(),
+            entries(&[(0, "zero"), (1, "one"), (2, "two")]),
+        );
         let bytes = round_trip(Release::V104, ByteOrder::LittleEndian, |writer| {
             writer.write_value_label_set(&set)
         });
         let sets = read_back(bytes);
         assert_eq!(sets.len(), 1);
-        // Slot 1 was empty in the input — reader skips empty slots,
-        // so entries come back with only values 0 and 2.
-        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].name(), "old");
+        assert_eq!(sets[0].entries().len(), 3);
         assert_eq!(sets[0].entries()[0].value(), 0);
         assert_eq!(sets[0].entries()[0].label(), "zero");
-        assert_eq!(sets[0].entries()[1].value(), 2);
-        assert_eq!(sets[0].entries()[1].label(), "two");
+        assert_eq!(sets[0].entries()[1].value(), 1);
+        assert_eq!(sets[0].entries()[2].value(), 2);
+        assert_eq!(sets[0].entries()[2].label(), "two");
     }
 
     #[test]
-    fn v104_rejects_negative_value() {
-        let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "nope")]));
-        // Use a one-shot writer; don't round_trip because finish()
-        // shouldn't be reached when write_value_label_set errors.
+    fn v104_negative_value_round_trips() {
+        // Pre-V108 values are `i16`, so negatives are valid.
+        let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "minus"), (0, "zero")]));
+        let bytes = round_trip(Release::V104, ByteOrder::LittleEndian, |writer| {
+            writer.write_value_label_set(&set)
+        });
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries()[0].value(), -1);
+        assert_eq!(sets[0].entries()[0].label(), "minus");
+        assert_eq!(sets[0].entries()[1].value(), 0);
+    }
+
+    #[test]
+    fn v104_rejects_value_that_does_not_fit_in_i16() {
+        let set = ValueLabelSet::new("big".to_owned(), entries(&[(40_000, "too big")]));
         let schema = Schema::builder()
             .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
             .build()
@@ -559,39 +581,37 @@ mod tests {
             error,
             DtaError::Format(ref e) if matches!(
                 e.kind(),
-                FormatErrorKind::OldValueLabelValueOutOfRange { value: -1 }
+                FormatErrorKind::OldValueLabelValueOutOfRange { value: 40_000 }
             )
         ));
     }
 
     #[test]
-    fn v104_rejects_duplicate_value() {
+    fn v104_duplicate_values_round_trip() {
+        // Pre-V108 has no slot table; duplicates are preserved in
+        // order just like the modern layout.
         let set = ValueLabelSet::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
-        let schema = Schema::builder()
-            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
-            .build()
-            .unwrap();
-        let header = Header::builder(Release::V104, ByteOrder::LittleEndian).build();
-        let mut writer = DtaWriter::new()
-            .from_writer(Cursor::new(Vec::<u8>::new()))
-            .write_header(header)
-            .unwrap()
-            .write_schema(schema)
-            .unwrap()
-            .into_record_writer()
-            .unwrap()
-            .into_long_string_writer()
-            .unwrap()
-            .into_value_label_writer()
-            .unwrap();
-        let error = writer.write_value_label_set(&set).unwrap_err();
-        assert!(matches!(
-            error,
-            DtaError::Format(ref e) if matches!(
-                e.kind(),
-                FormatErrorKind::OldValueLabelValueOutOfRange { value: 1 }
-            )
-        ));
+        let bytes = round_trip(Release::V104, ByteOrder::LittleEndian, |writer| {
+            writer.write_value_label_set(&set)
+        });
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].label(), "a");
+        assert_eq!(sets[0].entries()[1].label(), "b");
+    }
+
+    #[test]
+    fn v107_round_trips_like_v104() {
+        // V105-V107 share the V104 layout. Cover one of them end-to-end
+        // so any re-split of this bucket shows up as a test failure.
+        let set = ValueLabelSet::new("old".to_owned(), entries(&[(-2, "neg"), (3, "three")]));
+        let bytes = round_trip(Release::V107, ByteOrder::LittleEndian, |writer| {
+            writer.write_value_label_set(&set)
+        });
+        let sets = read_back(bytes);
+        assert_eq!(sets[0].entries()[0].value(), -2);
+        assert_eq!(sets[0].entries()[0].label(), "neg");
+        assert_eq!(sets[0].entries()[1].value(), 3);
     }
 
     // -- Error cases --------------------------------------------------------

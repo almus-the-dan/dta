@@ -277,9 +277,8 @@ pub enum FormatErrorKind {
         /// The release that cannot store long strings.
         release: Release,
     },
-    /// A value-label value cannot be represented in the V104
-    /// legacy layout, which uses the entry's array index as the
-    /// value (non-negative, ≤ 8190).
+    /// A value-label value cannot be represented in the pre-V108
+    /// layout, which stores values as `i16`.
     OldValueLabelValueOutOfRange {
         /// The caller-supplied value that doesn't fit.
         value: i32,
@@ -342,8 +341,8 @@ impl fmt::Display for FormatErrorKind {
             }
             Self::OldValueLabelValueOutOfRange { value } => write!(
                 f,
-                "value-label value {value} is out of range for the V104 legacy layout \
-                 (must be 0..=8190)",
+                "value-label value {value} is out of range for the pre-V108 layout \
+                 (must fit in i16, i.e. -32768..=32767)",
             ),
             Self::TaggedMissingUnsupported {
                 release,

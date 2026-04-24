@@ -6,9 +6,10 @@ use super::header::Header;
 use super::schema::Schema;
 use super::value_label::ValueLabelSet;
 use super::value_label_format::{
-    build_modern_text_payload, build_old_slot_table, modern_payload_bytes,
-    narrow_entry_count_to_u32, narrow_slot_count_to_table_len,
+    build_modern_text_payload, encode_old_entries, modern_payload_bytes, narrow_entry_count_to_u32,
+    narrow_old_entry_count_to_u16,
 };
+use super::value_label_parse::OLD_VALUE_LABEL_SIZE;
 use super::value_label_table::ValueLabelTable;
 
 /// Writes value-label sets asynchronously — the last section of a
@@ -152,17 +153,22 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
-    /// Writes one set in the V104 legacy layout.
+    /// Writes one set in the V104-V107 legacy layout:
+    ///
+    /// - `n`: `u16` — entry count
+    /// - `name`: fixed-width 9 bytes + 1-byte padding
+    /// - `values`: `u16[n]` — the `i16` encoding of each entry's value
+    /// - `labels`: `char[8][n]` — null-padded labels, 8 bytes each
     async fn write_old_set(&mut self, set: &ValueLabelSet) -> Result<()> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();
         let position_before = self.state.position();
 
-        let slots = build_old_slot_table(set, self.state.encoding(), position_before)?;
-        let set_len_u16 = narrow_slot_count_to_table_len(slots.len(), position_before)?;
+        let encoded_labels = encode_old_entries(set, self.state.encoding(), position_before)?;
+        let entry_count = narrow_old_entry_count_to_u16(encoded_labels.len(), position_before)?;
 
         self.state
-            .write_u16(set_len_u16, byte_order, Section::ValueLabels)
+            .write_u16(entry_count, byte_order, Section::ValueLabels)
             .await?;
         self.state
             .write_fixed_string(
@@ -172,7 +178,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
                 Field::ValueLabelName,
             )
             .await?;
-        // V104 padding is 2 bytes of zeros.
+        // Pre-V108 padding after the name is 1 byte of zeros.
         self.state
             .write_padded_bytes(
                 &[],
@@ -181,10 +187,20 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
             )
             .await?;
 
-        for slot in &slots {
-            let bytes = slot.as_deref().unwrap_or_default();
+        // Values as `u16` (round-tripped through `i16` so the negative
+        // range survives). `encode_old_entries` already checked the
+        // range, so the cast can't truncate.
+        for entry in set.entries() {
+            let signed = i16::try_from(entry.value())
+                .expect("encode_old_entries verified the value fits in i16");
             self.state
-                .write_padded_bytes(bytes, 8, Section::ValueLabels)
+                .write_u16(signed.cast_unsigned(), byte_order, Section::ValueLabels)
+                .await?;
+        }
+
+        for label in &encoded_labels {
+            self.state
+                .write_padded_bytes(label, OLD_VALUE_LABEL_SIZE, Section::ValueLabels)
                 .await?;
         }
         Ok(())

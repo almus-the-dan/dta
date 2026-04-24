@@ -5,6 +5,9 @@ use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
 use super::value_label::{ValueLabelEntry, ValueLabelSet};
 
+/// Fixed byte-width of each label in the pre-V108 layout.
+pub(super) const OLD_VALUE_LABEL_SIZE: usize = 8;
+
 /// Disambiguated 5-byte tag at the entry-start position within the
 /// modern value-labels section.
 pub(super) enum XmlLabelTag {
@@ -62,21 +65,38 @@ pub(super) fn overflow_error() -> DtaError {
     )
 }
 
-/// Narrows a V104 entry index (`usize`) to `i32` — the legacy layout
-/// uses the entry's position as its value. Produces a
-/// [`FormatErrorKind::FieldTooLarge`] on overflow.
-pub(super) fn entry_index_to_i32(entry_index: usize) -> Result<i32> {
-    i32::try_from(entry_index).map_err(|_| {
-        DtaError::format(
-            Section::ValueLabels,
-            0,
-            FormatErrorKind::FieldTooLarge {
-                field: Field::ValueLabelEntry,
-                max: u64::try_from(i32::MAX).unwrap_or(u64::MAX),
-                actual: u64::try_from(entry_index).unwrap_or(u64::MAX),
-            },
-        )
-    })
+/// Parses the pre-V108 value-label payload: `u16 values[n]` followed
+/// by `8 * n` bytes of fixed-width labels.
+pub(super) fn parse_old_payload(
+    payload: &[u8],
+    byte_order: ByteOrder,
+    encoding: &'static encoding_rs::Encoding,
+    set_name: &str,
+) -> Result<ValueLabelSet> {
+    let entry_count = payload.len() / (2 + OLD_VALUE_LABEL_SIZE);
+    debug_assert_eq!(
+        payload.len(),
+        entry_count * (2 + OLD_VALUE_LABEL_SIZE),
+        "caller must hand `parse_old_payload` an exact-fit buffer",
+    );
+
+    let values_bytes = 2 * entry_count;
+    let mut entries = Vec::with_capacity(entry_count);
+    for entry_index in 0..entry_count {
+        let value_position = 2 * entry_index;
+        let raw_value = byte_order.read_u16([payload[value_position], payload[value_position + 1]]);
+        // Pre-V108 values round-trip through `i16` so negative codings
+        // survive. The public `ValueLabelEntry` stores `i32`, so we
+        // sign-extend.
+        let value = i32::from(raw_value.cast_signed());
+
+        let label_start = values_bytes + OLD_VALUE_LABEL_SIZE * entry_index;
+        let label_bytes = &payload[label_start..label_start + OLD_VALUE_LABEL_SIZE];
+        let label = decode_label(label_bytes, OLD_VALUE_LABEL_SIZE, encoding)?;
+
+        entries.push(ValueLabelEntry::new(value, label));
+    }
+    Ok(ValueLabelSet::new(set_name.to_owned(), entries))
 }
 
 /// Parses the modern value-label payload:
