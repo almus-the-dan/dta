@@ -80,8 +80,7 @@ impl<R: AsyncRead + Unpin> AsyncValueLabelReader<R> {
     /// Reads all remaining value-label sets into `table`, keyed by
     /// set name.
     ///
-    /// Sets are inserted with first-wins semantics via
-    /// [`ValueLabelTable::get_or_insert`]: if `table` already contains
+    /// Sets are inserted with first-wins semantics: if `table` already contains
     /// a set for a given name, it is left untouched and the duplicate
     /// from the file is discarded.
     ///
@@ -98,7 +97,9 @@ impl<R: AsyncRead + Unpin> AsyncValueLabelReader<R> {
     /// specification.
     pub async fn read_remaining_into(&mut self, table: &mut ValueLabelTable) -> Result<()> {
         while let Some(set) = self.read_value_label_set().await? {
-            table.get_or_insert(set);
+            if table.get(set.name()).is_none() {
+                table.insert(set);
+            }
         }
         Ok(())
     }

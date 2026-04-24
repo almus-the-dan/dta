@@ -1,54 +1,74 @@
+use super::long_string::LongString;
+use super::long_string_ref::LongStringRef;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::long_string::LongString;
-use super::long_string_ref::LongStringRef;
-
-/// Deduplicating table of long string (strL / GSO) payloads, used
-/// while preparing records for a DTA writer or to resolve
-/// [`LongStringRef`]s read from a file.
+/// Table of long string (strL / GSO) payloads, used while preparing
+/// records for a DTA writer or to resolve [`LongStringRef`]s read from
+/// a file.
 ///
-/// Two insertion paths are provided depending on what the caller
-/// controls:
+/// The table is constructed in one of two modes, and the mode fixes
+/// how [`get_or_insert`](Self::get_or_insert) behaves:
 ///
-/// - [`get_or_insert_by_content`](Self::get_or_insert_by_content)
-///   dedupes on the payload bytes and assigns the caller's
-///   `(variable, observation)` only on a first-time insertion. This
-///   is the write-side flow — repeated payloads collapse into a
-///   single strL entry on disk, and the caller embeds the returned
-///   ref in the data section.
-/// - [`get_or_insert_by_key`](Self::get_or_insert_by_key) keys on the
-///   given `(variable, observation)`, inserting only when that key is
-///   free. This is the read-side flow — the file has already assigned
-///   canonical keys and they must be preserved so that
+/// - [`for_writing`](Self::for_writing) dedupes by payload bytes.
+///   Inserting a previously seen payload returns the ref assigned at
+///   its first insertion and ignores the caller's `(variable,
+///   observation)`. This is the write-side flow — repeated payloads
+///   collapse into a single strL entry on disk, and the caller embeds
+///   the returned ref in the data section.
+/// - [`for_reading`](Self::for_reading) keys on the given `(variable,
+///   observation)`. Inserting always returns that key; if the slot is
+///   already occupied, the existing entry is kept (first-in wins).
+///   This is the read-side flow — the file has already assigned
+///   canonical keys, and they must be preserved so that
 ///   [`LongStringRef`]s from the data section resolve via
-///   [`get`](Self::get).
+///   [`get`](Self::get), so duplicate content is preserved.
 ///
-/// After writing all records and the chain has advanced to
+/// When writing, after writing all records and the chain has advanced to
 /// [`LongStringWriter`], iterate the table with [`iter`](Self::iter)
 /// and pass each yielded [`LongString`] to
 /// [`LongStringWriter::write_long_string`].
+///
+/// When reading, skip to the long string section and read each long
+/// string into the table using [`LongStringReader::read_remaining_into`].
+/// Then use [`LongStringReader::seek_records`] to return the beginning
+/// of the records section. As records are read, values of type
+/// [`Value::LongStringRef`] will provide the observation/variable pairs
+/// needed to look up the [`LongString`] using [`get`](Self::get).
 ///
 /// Entries are yielded in `(variable, observation)` order, matching
 /// the DTA file layout requirement for the strL section.
 ///
 /// # Memory
 ///
-/// Stored payloads are reference-counted via [`Rc`] and shared
-/// between the content-indexed and location-indexed maps — a long
-/// string is held in memory once, regardless of how many times it
-/// was referenced from the data section.
-#[derive(Debug, Default)]
+/// Stored payloads are reference-counted via [`Rc`]. When a
+/// reading-mode table is populated with duplicate payloads under
+/// different keys, the bytes are held in memory once and shared
+/// between position entries.
+#[derive(Debug)]
 pub struct LongStringTable {
+    mode: Mode,
     // Ordered storage: drives the iteration order required by the
     // strL section layout.
     position: BTreeMap<(u32, u64), StoredEntry>,
     // Dedup: text and binary payloads live in separate maps, so the
     // key can be a plain `Rc<[u8]>`. `Rc<T>: Borrow<T>` then lets
     // `get(&[u8])` look up without allocating a query key.
+    //
+    // The recorded `(variable, observation)` value is meaningful only
+    // in `Mode::Writing`, where it points at the canonical (first)
+    // inserter for a payload. In `Mode::Reading` the value is still
+    // populated but unused — the maps exist purely to share the
+    // `Rc<[u8]>` across duplicate content.
     content_text: HashMap<Rc<[u8]>, (u32, u64)>,
     content_binary: HashMap<Rc<[u8]>, (u32, u64)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Reading,
+    Writing,
 }
 
 /// Entry held in the location-indexed map. `data` is shared (via
@@ -60,31 +80,66 @@ struct StoredEntry {
 }
 
 impl LongStringTable {
-    /// Creates an empty table.
+    /// Creates a table for populating from a DTA file's strL section.
+    ///
+    /// [`get_or_insert`](Self::get_or_insert) preserves the caller's
+    /// `(variable, observation)` key. This is the mode to use when
+    /// feeding a [`LongStringReader`](super::long_string_reader::LongStringReader)
+    /// or its async counterpart into the table.
     #[must_use]
     #[inline]
-    pub fn new() -> Self {
+    pub fn for_reading() -> Self {
+        Self::with_mode(Mode::Reading)
+    }
+
+    /// Creates a table for collecting strL payloads to be written to a
+    /// DTA file.
+    ///
+    /// [`get_or_insert`](Self::get_or_insert) dedupes by payload
+    /// bytes. Repeat payloads collapse into the ref assigned during
+    /// the first insertion.
+    #[must_use]
+    #[inline]
+    pub fn for_writing() -> Self {
+        Self::with_mode(Mode::Writing)
+    }
+
+    fn with_mode(mode: Mode) -> Self {
         Self {
+            mode,
             position: BTreeMap::new(),
             content_text: HashMap::new(),
             content_binary: HashMap::new(),
         }
     }
 
-    /// Returns the ref for the given `(data, binary)` payload,
-    /// keyed by content.
+    /// Inserts the given payload, returning a [`LongStringRef`].
     ///
-    /// If the payload was already inserted, returns the ref assigned
-    /// at its first insertion (the given `variable` and
-    /// `observation` are ignored in that case). Otherwise, a new ref
-    /// is assigned using the given `(variable, observation)` as its
-    /// key.
+    /// Behavior depends on the table's mode:
     ///
-    /// This is the write-side insertion path. Use
-    /// [`get_or_insert_by_key`](Self::get_or_insert_by_key) when the
-    /// caller is reading a file and must preserve the file's keys
-    /// verbatim.
-    pub fn get_or_insert_by_content(
+    /// - **Writing** ([`for_writing`](Self::for_writing)): dedupes by
+    ///   `(data, binary)`. If the payload was already inserted, the
+    ///   returned ref is the one assigned at its first insertion and
+    ///   the caller's `variable`/`observation` are ignored.
+    /// - **Reading** ([`for_reading`](Self::for_reading)): keys on the
+    ///   caller's `(variable, observation)`. If the slot is already
+    ///   occupied, the existing entry is kept (first-in wins, the new
+    ///   `data`/`binary` are discarded), and the returned ref is
+    ///   always `LongStringRef::new(variable, observation)`.
+    pub fn get_or_insert(
+        &mut self,
+        variable: u32,
+        observation: u64,
+        data: &[u8],
+        binary: bool,
+    ) -> LongStringRef {
+        match self.mode {
+            Mode::Writing => self.get_or_insert_by_content(variable, observation, data, binary),
+            Mode::Reading => self.get_or_insert_by_key(variable, observation, data, binary),
+        }
+    }
+
+    fn get_or_insert_by_content(
         &mut self,
         variable: u32,
         observation: u64,
@@ -112,30 +167,7 @@ impl LongStringTable {
         LongStringRef::new(variable, observation)
     }
 
-    /// Inserts the given `(data, binary)` payload under the given
-    /// `(variable, observation)` key if that key is free.
-    ///
-    /// Unlike [`get_or_insert_by_content`](Self::get_or_insert_by_content),
-    /// this path never synthesizes a different key — the caller's
-    /// `(variable, observation)` is treated as authoritative. This is
-    /// the read-side insertion path: when populating the table from a
-    /// DTA file's strL section, each GSO block's keys must survive
-    /// intact so that [`LongStringRef`]s from the data section
-    /// resolve via [`get`](Self::get).
-    ///
-    /// # Collision behavior
-    ///
-    /// - **Key collision**: if the `(variable, observation)` slot is
-    ///   already occupied, the existing entry is kept (first in wins)
-    ///   and the caller's `data`/`binary` are discarded.
-    /// - **Content collision**: if the payload was already stored
-    ///   under a different key, the existing payload is reused (the
-    ///   `Rc<[u8]>` is shared) but the content map's recorded key is
-    ///   *not* updated, so [`get_or_insert_by_content`](Self::get_or_insert_by_content)
-    ///   continues to return the first inserter's key.
-    ///
-    /// Always returns `LongStringRef::new(variable, observation)`.
-    pub fn get_or_insert_by_key(
+    fn get_or_insert_by_key(
         &mut self,
         variable: u32,
         observation: u64,
@@ -154,9 +186,7 @@ impl LongStringTable {
         };
         // Reuse the existing `Rc` when this payload is already stored
         // under a different key, so both position entries share one
-        // allocation. The content map's recorded key is left as-is so
-        // that `get_or_insert_by_content` continues to return the
-        // original inserter.
+        // allocation.
         let shared: Rc<[u8]> = if let Some((existing_rc, _)) = content.get_key_value(data) {
             Rc::clone(existing_rc)
         } else {
@@ -176,14 +206,14 @@ impl LongStringTable {
     /// Removes the entry matching the given key, returning `true` if
     /// an entry was removed.
     ///
-    /// When the removed entry was the canonical content-dedup target
-    /// (i.e., [`get_or_insert_by_content`](Self::get_or_insert_by_content)
+    /// In writing mode, when the removed entry was the canonical
+    /// content-dedup target (i.e., [`get_or_insert`](Self::get_or_insert)
     /// would have returned this key for its payload), the content map
-    /// entry is also cleared so that a subsequent `get_or_insert_by_content`
-    /// call assigns a fresh canonical target. Other position entries
-    /// that happen to share the same payload via a cloned `Rc` are
+    /// entry is also cleared so that a subsequent `get_or_insert` call
+    /// assigns a fresh canonical target. Other position entries that
+    /// happen to share the same payload via a cloned `Rc` are
     /// untouched.
-    pub fn remove_by_key(&mut self, reference: &LongStringRef) -> bool {
+    pub fn remove(&mut self, reference: &LongStringRef) -> bool {
         let key = (reference.variable(), reference.observation());
         let Some(removed) = self.position.remove(&key) else {
             return false;
@@ -273,94 +303,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_is_empty() {
-        let table = LongStringTable::new();
+    fn for_reading_is_empty() {
+        let table = LongStringTable::for_reading();
         assert_eq!(table.len(), 0);
         assert!(table.is_empty());
     }
 
     #[test]
-    fn default_matches_new() {
-        let table = LongStringTable::default();
+    fn for_writing_is_empty() {
+        let table = LongStringTable::for_writing();
+        assert_eq!(table.len(), 0);
         assert!(table.is_empty());
     }
 
+    // -- Writing mode -------------------------------------------------------
+
     #[test]
-    fn get_or_insert_by_content_new_returns_given_key() {
-        let mut table = LongStringTable::new();
-        let reference = table.get_or_insert_by_content(3, 5, b"hello", false);
+    fn writing_insert_new_returns_given_key() {
+        let mut table = LongStringTable::for_writing();
+        let reference = table.get_or_insert(3, 5, b"hello", false);
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
     }
 
     #[test]
-    fn get_or_insert_by_content_duplicate_returns_original_ref() {
-        let mut table = LongStringTable::new();
-        let first = table.get_or_insert_by_content(3, 5, b"hello", false);
-        let second = table.get_or_insert_by_content(7, 99, b"hello", false);
+    fn writing_insert_duplicate_returns_original_ref() {
+        let mut table = LongStringTable::for_writing();
+        let first = table.get_or_insert(3, 5, b"hello", false);
+        let second = table.get_or_insert(7, 99, b"hello", false);
         assert_eq!(first, second);
         assert_eq!(table.len(), 1);
     }
 
     #[test]
-    fn get_or_insert_by_content_different_binary_flag_is_distinct() {
-        let mut table = LongStringTable::new();
-        let text_ref = table.get_or_insert_by_content(1, 1, b"\x00\x01\x02", false);
-        let binary_ref = table.get_or_insert_by_content(2, 2, b"\x00\x01\x02", true);
+    fn writing_different_binary_flag_is_distinct() {
+        let mut table = LongStringTable::for_writing();
+        let text_ref = table.get_or_insert(1, 1, b"\x00\x01\x02", false);
+        let binary_ref = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
         assert_ne!(text_ref, binary_ref);
         assert_eq!(table.len(), 2);
     }
 
     #[test]
-    fn get_or_insert_by_content_distinct_payloads_are_stored_separately() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"a", false);
-        table.get_or_insert_by_content(1, 2, b"b", false);
-        table.get_or_insert_by_content(1, 3, b"c", false);
+    fn writing_distinct_payloads_are_stored_separately() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"a", false);
+        table.get_or_insert(1, 2, b"b", false);
+        table.get_or_insert(1, 3, b"c", false);
         assert_eq!(table.len(), 3);
     }
 
     #[test]
-    fn is_empty_tracks_insertion() {
-        let mut table = LongStringTable::new();
+    fn writing_is_empty_tracks_insertion() {
+        let mut table = LongStringTable::for_writing();
         assert!(table.is_empty());
-        table.get_or_insert_by_content(1, 1, b"x", false);
+        table.get_or_insert(1, 1, b"x", false);
         assert!(!table.is_empty());
     }
 
-    #[test]
-    fn iter_yields_in_variable_then_observation_order() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(3, 1, b"c1", false);
-        table.get_or_insert_by_content(1, 2, b"a2", false);
-        table.get_or_insert_by_content(2, 5, b"b5", false);
-        table.get_or_insert_by_content(1, 1, b"a1", false);
-
-        let ordered: Vec<(u32, u64)> = table
-            .iter(UTF_8)
-            .map(|ls| (ls.variable(), ls.observation()))
-            .collect();
-        assert_eq!(ordered, vec![(1, 1), (1, 2), (2, 5), (3, 1)]);
-    }
+    // -- Reading mode -------------------------------------------------------
 
     #[test]
-    fn iter_preserves_data_and_binary_flag() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"text", false);
-        table.get_or_insert_by_content(2, 2, b"\x00\x01", true);
-
-        let long_strings: Vec<_> = table.iter(UTF_8).collect();
-        assert_eq!(long_strings[0].data(), b"text");
-        assert!(!long_strings[0].is_binary());
-        assert_eq!(long_strings[1].data(), b"\x00\x01");
-        assert!(long_strings[1].is_binary());
-    }
-
-    #[test]
-    fn get_or_insert_by_key_inserts_new_entry() {
-        let mut table = LongStringTable::new();
-        let reference = table.get_or_insert_by_key(3, 5, b"hello", false);
+    fn reading_insert_new_entry() {
+        let mut table = LongStringTable::for_reading();
+        let reference = table.get_or_insert(3, 5, b"hello", false);
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
@@ -369,12 +376,12 @@ mod tests {
     }
 
     #[test]
-    fn get_or_insert_by_key_always_returns_passed_key() {
-        let mut table = LongStringTable::new();
-        // Even though the same payload could dedupe via `by_content`,
-        // `by_key` must honor the caller's (variable, observation).
-        let first = table.get_or_insert_by_key(3, 5, b"hello", false);
-        let second = table.get_or_insert_by_key(7, 9, b"hello", false);
+    fn reading_always_returns_passed_key() {
+        let mut table = LongStringTable::for_reading();
+        // Even though the same payload could dedupe under a writing
+        // table, reading mode must honor the caller's key.
+        let first = table.get_or_insert(3, 5, b"hello", false);
+        let second = table.get_or_insert(7, 9, b"hello", false);
         assert_eq!(first.variable(), 3);
         assert_eq!(first.observation(), 5);
         assert_eq!(second.variable(), 7);
@@ -383,11 +390,11 @@ mod tests {
     }
 
     #[test]
-    fn get_or_insert_by_key_is_first_wins_on_key_collision() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_key(3, 5, b"first", false);
+    fn reading_is_first_wins_on_key_collision() {
+        let mut table = LongStringTable::for_reading();
+        table.get_or_insert(3, 5, b"first", false);
         // Second call on the same key with different data is a no-op.
-        let reference = table.get_or_insert_by_key(3, 5, b"second", false);
+        let reference = table.get_or_insert(3, 5, b"second", false);
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
@@ -396,10 +403,10 @@ mod tests {
     }
 
     #[test]
-    fn get_or_insert_by_key_shares_payload_across_duplicate_content() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_key(3, 5, b"hello", false);
-        table.get_or_insert_by_key(7, 9, b"hello", false);
+    fn reading_shares_payload_across_duplicate_content() {
+        let mut table = LongStringTable::for_reading();
+        table.get_or_insert(3, 5, b"hello", false);
+        table.get_or_insert(7, 9, b"hello", false);
 
         // Both keys resolve to the same payload.
         let first = table.get(&LongStringRef::new(3, 5), UTF_8).unwrap();
@@ -409,40 +416,10 @@ mod tests {
     }
 
     #[test]
-    fn by_content_after_by_key_returns_first_key_inserter() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_key(3, 5, b"hello", false);
-        table.get_or_insert_by_key(7, 9, b"hello", false);
-
-        // Subsequent content-keyed insertion should dedupe against
-        // the first by_key entry, not the second.
-        let reference = table.get_or_insert_by_content(99, 99, b"hello", false);
-        assert_eq!(reference.variable(), 3);
-        assert_eq!(reference.observation(), 5);
-        assert_eq!(table.len(), 2);
-    }
-
-    #[test]
-    fn by_key_after_by_content_preserves_both_keys() {
-        let mut table = LongStringTable::new();
-        // Writer-style first.
-        let content_ref = table.get_or_insert_by_content(1, 1, b"hello", false);
-        // Reader-style adds a second key for the same payload.
-        let key_ref = table.get_or_insert_by_key(2, 2, b"hello", false);
-        assert_eq!(content_ref.variable(), 1);
-        assert_eq!(key_ref.variable(), 2);
-        assert_eq!(table.len(), 2);
-
-        // A later `by_content` still returns the original inserter's key.
-        let later = table.get_or_insert_by_content(99, 99, b"hello", false);
-        assert_eq!(later, content_ref);
-    }
-
-    #[test]
-    fn get_or_insert_by_key_separates_text_and_binary() {
-        let mut table = LongStringTable::new();
-        let text = table.get_or_insert_by_key(1, 1, b"\x00\x01\x02", false);
-        let binary = table.get_or_insert_by_key(2, 2, b"\x00\x01\x02", true);
+    fn reading_separates_text_and_binary() {
+        let mut table = LongStringTable::for_reading();
+        let text = table.get_or_insert(1, 1, b"\x00\x01\x02", false);
+        let binary = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
         assert_ne!(text, binary);
         assert_eq!(table.len(), 2);
         assert!(
@@ -459,61 +436,79 @@ mod tests {
         );
     }
 
+    // -- iter ---------------------------------------------------------------
+
     #[test]
-    fn remove_by_key_removes_existing_entry() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(3, 5, b"hello", false);
+    fn iter_yields_in_variable_then_observation_order() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(3, 1, b"c1", false);
+        table.get_or_insert(1, 2, b"a2", false);
+        table.get_or_insert(2, 5, b"b5", false);
+        table.get_or_insert(1, 1, b"a1", false);
+
+        let ordered: Vec<(u32, u64)> = table
+            .iter(UTF_8)
+            .map(|ls| (ls.variable(), ls.observation()))
+            .collect();
+        assert_eq!(ordered, vec![(1, 1), (1, 2), (2, 5), (3, 1)]);
+    }
+
+    #[test]
+    fn iter_preserves_data_and_binary_flag() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"text", false);
+        table.get_or_insert(2, 2, b"\x00\x01", true);
+
+        let long_strings: Vec<_> = table.iter(UTF_8).collect();
+        assert_eq!(long_strings[0].data(), b"text");
+        assert!(!long_strings[0].is_binary());
+        assert_eq!(long_strings[1].data(), b"\x00\x01");
+        assert!(long_strings[1].is_binary());
+    }
+
+    // -- remove_by_key ------------------------------------------------------
+
+    #[test]
+    fn remove_removes_existing_entry() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(3, 5, b"hello", false);
         let reference = LongStringRef::new(3, 5);
 
-        assert!(table.remove_by_key(&reference));
+        assert!(table.remove(&reference));
         assert_eq!(table.len(), 0);
         assert!(table.get(&reference, UTF_8).is_none());
     }
 
     #[test]
-    fn remove_by_key_returns_false_for_missing_entry() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"present", false);
+    fn remove_returns_false_for_missing_entry() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"present", false);
 
         let missing = LongStringRef::new(99, 99);
-        assert!(!table.remove_by_key(&missing));
+        assert!(!table.remove(&missing));
         assert_eq!(table.len(), 1);
     }
 
     #[test]
-    fn remove_by_key_clears_content_pointer_when_canonical() {
-        let mut table = LongStringTable::new();
-        let reference = table.get_or_insert_by_content(3, 5, b"hello", false);
-        table.remove_by_key(&reference);
+    fn remove_clears_content_pointer_when_canonical() {
+        let mut table = LongStringTable::for_writing();
+        let reference = table.get_or_insert(3, 5, b"hello", false);
+        table.remove(&reference);
 
-        // After removal, a fresh `by_content` call must be able to
-        // assign its own key rather than point back at the gone entry.
-        let fresh = table.get_or_insert_by_content(7, 9, b"hello", false);
+        // After removal, a fresh insert must be able to assign its
+        // own key rather than point back at the gone entry.
+        let fresh = table.get_or_insert(7, 9, b"hello", false);
         assert_eq!(fresh.variable(), 7);
         assert_eq!(fresh.observation(), 9);
     }
 
     #[test]
-    fn remove_by_key_preserves_content_pointer_for_non_canonical_entry() {
-        let mut table = LongStringTable::new();
-        // (3, 5) is canonical; (7, 9) shares the payload but is not.
-        let canonical = table.get_or_insert_by_content(3, 5, b"hello", false);
-        table.get_or_insert_by_key(7, 9, b"hello", false);
+    fn remove_text_and_binary_tables_are_independent() {
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"data", false);
+        table.get_or_insert(2, 2, b"data", true);
 
-        // Removing the non-canonical entry must not disturb the
-        // content map's pointer to the canonical entry.
-        assert!(table.remove_by_key(&LongStringRef::new(7, 9)));
-        let later = table.get_or_insert_by_content(99, 99, b"hello", false);
-        assert_eq!(later, canonical);
-    }
-
-    #[test]
-    fn remove_by_key_text_and_binary_tables_are_independent() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"data", false);
-        table.get_or_insert_by_content(2, 2, b"data", true);
-
-        assert!(table.remove_by_key(&LongStringRef::new(1, 1)));
+        assert!(table.remove(&LongStringRef::new(1, 1)));
         assert_eq!(table.len(), 1);
         // The binary entry with identical bytes is unaffected.
         let binary = table.get(&LongStringRef::new(2, 2), UTF_8).unwrap();
@@ -521,10 +516,12 @@ mod tests {
         assert_eq!(binary.data(), b"data");
     }
 
+    // -- get ----------------------------------------------------------------
+
     #[test]
     fn get_returns_stored_entry_by_ref() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(3, 5, b"hello", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(3, 5, b"hello", false);
 
         let reference = LongStringRef::new(3, 5);
         let long_string = table.get(&reference, UTF_8).unwrap();
@@ -536,8 +533,8 @@ mod tests {
 
     #[test]
     fn get_returns_none_for_missing_ref() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"only", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"only", false);
 
         let missing = LongStringRef::new(99, 99);
         assert!(table.get(&missing, UTF_8).is_none());
@@ -545,8 +542,8 @@ mod tests {
 
     #[test]
     fn get_preserves_binary_flag() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(2, 2, b"\x00\x01\x02", true);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(2, 2, b"\x00\x01\x02", true);
 
         let reference = LongStringRef::new(2, 2);
         let long_string = table.get(&reference, UTF_8).unwrap();
@@ -557,8 +554,8 @@ mod tests {
     #[test]
     fn get_uses_caller_supplied_encoding_for_decoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"\x80", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"\x80", false);
 
         let reference = LongStringRef::new(1, 1);
         let decoded = table
@@ -575,8 +572,8 @@ mod tests {
     #[test]
     fn iter_captures_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"\x80", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"\x80", false);
 
         let decoded = table
             .iter(WINDOWS_1252)

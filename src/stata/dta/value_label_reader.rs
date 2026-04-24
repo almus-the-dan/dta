@@ -84,13 +84,9 @@ impl<R: BufRead> ValueLabelReader<R> {
     /// Reads all remaining value-label sets into `table`, keyed by
     /// set name.
     ///
-    /// Sets are inserted with first-wins semantics via
-    /// [`ValueLabelTable::get_or_insert`]: if `table` already contains
+    /// Sets are inserted with first-wins semantics: if `table` already contains
     /// a set for a given name, it is left untouched and the duplicate
-    /// from the file is discarded. This mirrors
-    /// [`LongStringTable::get_or_insert_by_key`](super::long_string_table::LongStringTable::get_or_insert_by_key)
-    /// and lets callers pre-populate `table` or merge multiple files
-    /// without losing earlier data.
+    /// from the file is discarded.
     ///
     /// This method drains the reader to completion — after it
     /// returns, `self` is ready for section navigation or to be
@@ -106,7 +102,9 @@ impl<R: BufRead> ValueLabelReader<R> {
     /// specification.
     pub fn read_remaining_into(&mut self, table: &mut ValueLabelTable) -> Result<()> {
         while let Some(set) = self.read_value_label_set()? {
-            table.get_or_insert(set);
+            if table.get(set.name()).is_none() {
+                table.insert(set);
+            }
         }
         Ok(())
     }

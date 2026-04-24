@@ -410,11 +410,11 @@ mod tests {
 
     #[tokio::test]
     async fn write_long_string_table_round_trip() {
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"apple", false);
-        table.get_or_insert_by_content(1, 2, b"banana", false);
-        table.get_or_insert_by_content(2, 1, b"carrot", false);
-        let duplicate_ref = table.get_or_insert_by_content(99, 99, b"apple", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"apple", false);
+        table.get_or_insert(1, 2, b"banana", false);
+        table.get_or_insert(2, 1, b"carrot", false);
+        let duplicate_ref = table.get_or_insert(99, 99, b"apple", false);
         assert_eq!(duplicate_ref.variable(), 1);
         assert_eq!(duplicate_ref.observation(), 1);
         assert_eq!(table.len(), 3);
@@ -435,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_long_string_table_empty_on_v117_round_trip() {
-        let table = LongStringTable::new();
+        let table = LongStringTable::for_writing();
         let entries = round_trip(Release::V117, ByteOrder::LittleEndian, |mut w| async move {
             w.write_long_string_table(&table).await.unwrap();
             w
@@ -487,7 +487,7 @@ mod tests {
     #[tokio::test]
     async fn pre_v117_tolerates_empty_long_string_table() {
         let mut writer = v114_long_string_writer().await;
-        let empty = LongStringTable::new();
+        let empty = LongStringTable::for_writing();
         writer.write_long_string_table(&empty).await.unwrap();
         // Transition should still succeed without emitting any
         // `<strls>` bytes.
@@ -503,8 +503,8 @@ mod tests {
     #[tokio::test]
     async fn pre_v117_rejects_write_long_string_table_with_entries() {
         let mut writer = v114_long_string_writer().await;
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"x", false);
+        let mut table = LongStringTable::for_writing();
+        table.get_or_insert(1, 1, b"x", false);
         let error = writer.write_long_string_table(&table).await.unwrap_err();
         assert!(matches!(
             error,

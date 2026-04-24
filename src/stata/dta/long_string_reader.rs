@@ -97,10 +97,11 @@ impl<R: BufRead> LongStringReader<R> {
     /// Reads all remaining long-string entries into `table`, keyed by
     /// their on-disk `(variable, observation)` pairs.
     ///
-    /// Each entry is inserted via
-    /// [`LongStringTable::get_or_insert_by_key`], preserving the
-    /// file's keys so that [`LongStringRef`](super::long_string_ref::LongStringRef)s
-    /// from the data section resolve via
+    /// `table` must have been created with
+    /// [`LongStringTable::for_reading`] so that
+    /// [`get_or_insert`](LongStringTable::get_or_insert) preserves the
+    /// file's keys. [`LongStringRef`](super::long_string_ref::LongStringRef)s
+    /// from the data section then resolve via
     /// [`LongStringTable::get`]. The reader's internal buffer is
     /// copied into the table, so callers are free to drop the reader
     /// afterward.
@@ -119,7 +120,7 @@ impl<R: BufRead> LongStringReader<R> {
     /// format specification.
     pub fn read_remaining_into(&mut self, table: &mut LongStringTable) -> Result<()> {
         while let Some(long_string) = self.read_long_string()? {
-            table.get_or_insert_by_key(
+            table.get_or_insert(
                 long_string.variable(),
                 long_string.observation(),
                 long_string.data(),
@@ -406,7 +407,7 @@ mod tests {
         );
         let mut reader = long_string_reader_for(bytes);
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
 
         assert_eq!(table.len(), 3);
@@ -430,7 +431,7 @@ mod tests {
             build_file_with_long_strings(Release::V118, &[text(1, 5_000_000_000, "wide obs")]);
         let mut reader = long_string_reader_for(bytes);
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
 
         let reference = LongStringRef::new(1, 5_000_000_000);
@@ -442,7 +443,7 @@ mod tests {
         let bytes = build_file_with_long_strings(Release::V114, &[]);
         let mut reader = long_string_reader_for(bytes);
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
         assert!(table.is_empty());
     }
@@ -461,7 +462,7 @@ mod tests {
         assert_eq!(first.data(), b"alpha");
         drop(first);
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
         assert_eq!(table.len(), 2);
         assert!(table.get(&LongStringRef::new(1, 1), UTF_8).is_none());
@@ -480,7 +481,7 @@ mod tests {
         let bytes = build_file_with_long_strings(Release::V117, &[text(1, 1, "one")]);
         let mut reader = long_string_reader_for(bytes);
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
         // Drained reader must be able to transition to the next phase.
         let _value_label_reader = reader.into_value_label_reader().unwrap();
@@ -491,8 +492,8 @@ mod tests {
         let bytes = build_file_with_long_strings(Release::V117, &[text(2, 2, "from file")]);
         let mut reader = long_string_reader_for(bytes);
 
-        let mut table = LongStringTable::new();
-        table.get_or_insert_by_content(1, 1, b"pre-existing", false);
+        let mut table = LongStringTable::for_reading();
+        table.get_or_insert(1, 1, b"pre-existing", false);
 
         reader.read_remaining_into(&mut table).unwrap();
         assert_eq!(table.len(), 2);

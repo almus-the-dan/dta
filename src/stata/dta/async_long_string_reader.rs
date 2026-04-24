@@ -93,10 +93,11 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
     /// Reads all remaining long-string entries into `table`, keyed by
     /// their on-disk `(variable, observation)` pairs.
     ///
-    /// Each entry is inserted via
-    /// [`LongStringTable::get_or_insert_by_key`], preserving the
-    /// file's keys so that [`LongStringRef`](super::long_string_ref::LongStringRef)s
-    /// from the data section resolve via
+    /// `table` must have been created with
+    /// [`LongStringTable::for_reading`] so that
+    /// [`get_or_insert`](LongStringTable::get_or_insert) preserves the
+    /// file's keys. [`LongStringRef`](super::long_string_ref::LongStringRef)s
+    /// from the data section then resolve via
     /// [`LongStringTable::get`]. The reader's internal buffer is
     /// copied into the table, so callers are free to drop the reader
     /// afterward.
@@ -115,7 +116,7 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
     /// format specification.
     pub async fn read_remaining_into(&mut self, table: &mut LongStringTable) -> Result<()> {
         while let Some(long_string) = self.read_long_string().await? {
-            table.get_or_insert_by_key(
+            table.get_or_insert(
                 long_string.variable(),
                 long_string.observation(),
                 long_string.data(),
@@ -418,7 +419,7 @@ mod tests {
         .await;
         let mut reader = reader_for(&bytes).await;
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).await.unwrap();
         assert_eq!(table.len(), 3);
         assert_eq!(
@@ -438,7 +439,7 @@ mod tests {
         let bytes = build_bytes_with_entries(Release::V114, &[]).await;
         let mut reader = reader_for(&bytes).await;
 
-        let mut table = LongStringTable::new();
+        let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).await.unwrap();
         assert!(table.is_empty());
     }

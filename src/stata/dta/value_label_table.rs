@@ -21,11 +21,6 @@ const INDEX_THRESHOLD: usize = 10;
 /// [`Variable`](crate::stata::dta::variable::Variable) plus an integer
 /// value to the label text.
 ///
-/// Mirrors the shape of
-/// [`LongStringTable`](crate::stata::dta::long_string_table::LongStringTable):
-/// [`insert`](Self::insert) replaces; [`get_or_insert`](Self::get_or_insert)
-/// is first-wins on name.
-///
 /// # Caching
 ///
 /// For sets with at least 10 entries, [`label_for`](Self::label_for)
@@ -69,29 +64,10 @@ impl ValueLabelTable {
     ///
     /// Replacing invalidates the cached index for that name (a fresh
     /// `OnceCell` is installed).
-    ///
-    /// Use [`get_or_insert`](Self::get_or_insert) if you want
-    /// first-wins semantics.
     pub fn insert(&mut self, set: ValueLabelSet) -> Option<ValueLabelSet> {
         let name: Rc<str> = Rc::from(set.name());
         self.indexes.insert(Rc::clone(&name), OnceCell::new());
         self.sets.insert(name, set)
-    }
-
-    /// Inserts `set` if no set with its name is already present and
-    /// returns a reference to whichever set now occupies the slot.
-    ///
-    /// This is the read-side insertion path: it preserves any set the
-    /// caller pre-populated or that a previous drain already inserted.
-    pub fn get_or_insert(&mut self, set: ValueLabelSet) -> &ValueLabelSet {
-        let name: Rc<str> = Rc::from(set.name());
-        match self.sets.entry(Rc::clone(&name)) {
-            Entry::Occupied(slot) => slot.into_mut(),
-            Entry::Vacant(slot) => {
-                self.indexes.entry(name).or_default();
-                slot.insert(set)
-            }
-        }
     }
 
     /// Returns the set with the given name, if any.
@@ -243,23 +219,6 @@ mod tests {
         assert_eq!(previous.label_for(1), Some("old"));
         assert_eq!(table.len(), 1);
         assert_eq!(table.get("a").unwrap().label_for(1), Some("new"));
-    }
-
-    #[test]
-    fn get_or_insert_is_first_wins() {
-        let mut table = ValueLabelTable::new();
-        table.insert(set_with("a", &[(1, "first")]));
-        let stored = table.get_or_insert(set_with("a", &[(1, "second")]));
-        assert_eq!(stored.label_for(1), Some("first"));
-        assert_eq!(table.len(), 1);
-    }
-
-    #[test]
-    fn get_or_insert_inserts_when_absent() {
-        let mut table = ValueLabelTable::new();
-        let stored = table.get_or_insert(set_with("a", &[(1, "new")]));
-        assert_eq!(stored.label_for(1), Some("new"));
-        assert_eq!(table.len(), 1);
     }
 
     #[test]
