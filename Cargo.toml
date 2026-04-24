@@ -2,7 +2,7 @@
 name = "dta"
 version = "0.1.0"
 edition = "2024"
-description = ""
+description = "Pure Rust streaming reader and writer for Stata's DTA file format, covering every released version (104-119), including XML-framed releases, tagged missing values, value-label sets, and long-string (strL) storage."
 license = "MIT"
 homepage = "https://github.com/almus-the-dan/dta"
 repository = "https://github.com/almus-the-dan/dta"
@@ -15,7 +15,7 @@ exclude = [
     "plans/",
     "benches/data/",
 ]
-keywords = ["stata", "data", "statistics", "data"]
+keywords = ["stata", "dta", "data", "statistics"]
 categories = ["parser-implementations", "encoding", "science"]
 
 [dependencies]
