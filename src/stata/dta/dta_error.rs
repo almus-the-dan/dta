@@ -280,6 +280,15 @@ pub enum FormatErrorKind {
         /// The caller-supplied value that doesn't fit.
         value: i32,
     },
+    /// A tagged missing value (`.a`–`.z`) was supplied for a variable
+    /// in a pre-V113 format that only supports the system missing
+    /// value (`.`).
+    TaggedMissingUnsupported {
+        /// The release that cannot represent tagged missings.
+        release: Release,
+        /// 0-based variable index within the schema.
+        variable_index: u32,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -331,6 +340,14 @@ impl fmt::Display for FormatErrorKind {
                 f,
                 "value-label value {value} is out of range for the V104 legacy layout \
                  (must be 0..=8190)",
+            ),
+            Self::TaggedMissingUnsupported {
+                release,
+                variable_index,
+            } => write!(
+                f,
+                "tagged missing value (.a–.z) for variable index {variable_index} \
+                 is not supported by format {release} (use MissingValue::System)",
             ),
             Self::RecordArityMismatch { expected, actual } => write!(
                 f,

@@ -7,9 +7,11 @@ use encoding_rs::Encoding;
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
+use super::release::Release;
 use super::value::Value;
 use super::variable::Variable;
 use super::variable_type::VariableType;
+use crate::stata::stata_error::StataError;
 
 /// Returns `true` when `value`'s variant matches the on-disk
 /// [`VariableType`]. `FixedString` widths are not checked here —
@@ -74,6 +76,34 @@ pub(super) fn validate_record_value_types(
         }
     }
     Ok(())
+}
+
+/// Converts a numeric `to_raw` result into a writer-side `DtaError`,
+/// tagging a [`FormatErrorKind::TaggedMissingUnsupported`] with the
+/// variable index and release when the source value was a tagged
+/// missing on a pre-113 format.
+pub(super) fn encode_numeric<T>(
+    raw: std::result::Result<T, StataError>,
+    release: Release,
+    variable_index: u32,
+    position: u64,
+) -> Result<T> {
+    raw.map_err(|error| match error {
+        StataError::TaggedMissingUnsupported => DtaError::format(
+            Section::Records,
+            position,
+            FormatErrorKind::TaggedMissingUnsupported {
+                release,
+                variable_index,
+            },
+        ),
+        StataError::NotMissingValue | StataError::InvalidTimestamp => {
+            // Neither can arise from `to_raw` today. Surface them as
+            // I/O errors so we don't silently swallow an unexpected
+            // variant if the `StataError` shape ever grows.
+            DtaError::io(Section::Records, std::io::Error::other(error.to_string()))
+        }
+    })
 }
 
 /// Narrows a `usize` variable index to the `u32` on-disk width used

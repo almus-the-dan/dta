@@ -71,11 +71,11 @@ impl<'a> Value<'a> {
         encoding: &'static Encoding,
     ) -> Result<Self> {
         match variable_type {
-            VariableType::Byte => parse_byte(column_bytes),
-            VariableType::Int => parse_int(column_bytes, byte_order),
-            VariableType::Long => parse_long(column_bytes, byte_order),
-            VariableType::Float => parse_float(column_bytes, byte_order),
-            VariableType::Double => parse_double(column_bytes, byte_order),
+            VariableType::Byte => parse_byte(column_bytes, release),
+            VariableType::Int => parse_int(column_bytes, byte_order, release),
+            VariableType::Long => parse_long(column_bytes, byte_order, release),
+            VariableType::Float => parse_float(column_bytes, byte_order, release),
+            VariableType::Double => parse_double(column_bytes, byte_order, release),
             VariableType::FixedString(_) => parse_fixed_string(column_bytes, encoding),
             VariableType::LongString => {
                 Ok(parse_long_string_ref(column_bytes, byte_order, release))
@@ -84,44 +84,45 @@ impl<'a> Value<'a> {
     }
 }
 
-fn parse_byte(column_bytes: &[u8]) -> Result<Value<'_>> {
-    let stata_value = StataByte::try_from(column_bytes[0]).map_err(|_| unrecognized_value())?;
+fn parse_byte(column_bytes: &[u8], release: Release) -> Result<Value<'_>> {
+    let stata_value =
+        StataByte::from_raw(column_bytes[0], release).map_err(|_| unrecognized_value())?;
     let value = Value::Byte(stata_value);
     Ok(value)
 }
 
-fn parse_int(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
+fn parse_int(column_bytes: &[u8], byte_order: ByteOrder, release: Release) -> Result<Value<'_>> {
     let raw = byte_order.read_u16([column_bytes[0], column_bytes[1]]);
-    let stata_value = StataInt::try_from(raw).map_err(|_| unrecognized_value())?;
+    let stata_value = StataInt::from_raw(raw, release).map_err(|_| unrecognized_value())?;
     let value = Value::Int(stata_value);
     Ok(value)
 }
 
-fn parse_long(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
+fn parse_long(column_bytes: &[u8], byte_order: ByteOrder, release: Release) -> Result<Value<'_>> {
     let raw = byte_order.read_u32([
         column_bytes[0],
         column_bytes[1],
         column_bytes[2],
         column_bytes[3],
     ]);
-    let stata_value = StataLong::try_from(raw).map_err(|_| unrecognized_value())?;
+    let stata_value = StataLong::from_raw(raw, release).map_err(|_| unrecognized_value())?;
     let value = Value::Long(stata_value);
     Ok(value)
 }
 
-fn parse_float(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
+fn parse_float(column_bytes: &[u8], byte_order: ByteOrder, release: Release) -> Result<Value<'_>> {
     let raw = byte_order.read_f32([
         column_bytes[0],
         column_bytes[1],
         column_bytes[2],
         column_bytes[3],
     ]);
-    let stata_value = StataFloat::try_from(raw).map_err(|_| unrecognized_value())?;
+    let stata_value = StataFloat::from_raw(raw, release).map_err(|_| unrecognized_value())?;
     let value = Value::Float(stata_value);
     Ok(value)
 }
 
-fn parse_double(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>> {
+fn parse_double(column_bytes: &[u8], byte_order: ByteOrder, release: Release) -> Result<Value<'_>> {
     let raw = byte_order.read_f64([
         column_bytes[0],
         column_bytes[1],
@@ -132,7 +133,7 @@ fn parse_double(column_bytes: &[u8], byte_order: ByteOrder) -> Result<Value<'_>>
         column_bytes[6],
         column_bytes[7],
     ]);
-    let stata_value = StataDouble::try_from(raw).map_err(|_| unrecognized_value())?;
+    let stata_value = StataDouble::from_raw(raw, release).map_err(|_| unrecognized_value())?;
     let value = Value::Double(stata_value);
     Ok(value)
 }

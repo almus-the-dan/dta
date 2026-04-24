@@ -2,66 +2,97 @@
 ///
 /// In DTA format 113+, an int is stored as two bytes (after endianness
 /// correction). Values whose signed interpretation is at most 32,740 represent
-/// data; values 0x7FE5–0x7FFF (32,741–32,767 signed) encode missing values.
+/// data; values 0x7FE5–0x7FFF (32,741–32,767 signed) encode missing values
+/// (`.`, `.a`–`.z`).
 ///
-/// The valid data range in Stata is −32,767 to 32,740.
+/// In pre-113 formats, only the single value 0x7FFF (32,767 signed) encodes
+/// system missing; values 0x7FE5–0x7FFE are valid data. Tagged missings
+/// (`.a`–`.z`) are unrepresentable in those formats.
 ///
 /// # Examples
 ///
 /// ```
-/// use dta::stata::stata_int::StataInt;
+/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
+/// use dta::stata::stata_int::StataInt;
 ///
-/// let present = StataInt::try_from(1000_u16).unwrap();
+/// let present = StataInt::from_raw(1000_u16, Release::V117).unwrap();
 /// assert_eq!(present, StataInt::Present(1000));
 ///
-/// let missing = StataInt::try_from(0x7FE5_u16).unwrap();
+/// let missing = StataInt::from_raw(0x7FE5_u16, Release::V117).unwrap();
 /// assert_eq!(missing, StataInt::Missing(MissingValue::System));
 /// ```
+use super::dta::release::Release;
 use super::missing_value::MissingValue;
 use super::stata_error::{Result, StataError};
 
-/// Maximum valid (non-missing) Stata int value when interpreted as signed.
+/// Maximum valid (non-missing) Stata int value for DTA 113+.
 const DTA_113_MAX_INT16: i16 = 32_740;
 
-/// Raw u16 value encoding system missing (`.`).
-const MISSING_INT_SYSTEM: u16 = 0x7FE5;
+/// Raw u16 value encoding system missing (`.`) in DTA 113+.
+const MISSING_INT_SYSTEM_113: u16 = 0x7FE5;
+
+/// Raw u16 value encoding system missing (`.`) in pre-113 formats.
+const MISSING_INT_SYSTEM_PRE_113: u16 = 0x7FFF;
 
 /// A Stata int: either a present `i16` value or a [`MissingValue`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StataInt {
     /// A present data value.
     Present(i16),
-    /// A missing value (`.`, `.a`–`.z`).
+    /// A missing value (`.` in any release; `.a`–`.z` in DTA 113+ only).
     Missing(MissingValue),
 }
 
-/// Interpret a raw `u16` read from a DTA file as a Stata int.
-///
-/// The value is reinterpreted as a signed `i16`. If the signed value exceeds
-/// the maximum valid value (32,740), it is classified as missing.
-impl TryFrom<u16> for StataInt {
-    type Error = StataError;
-
-    fn try_from(value: u16) -> Result<Self> {
-        let signed = value.cast_signed();
-        if signed > DTA_113_MAX_INT16 {
-            Ok(Self::Missing(MissingValue::try_from(value)?))
+impl StataInt {
+    /// Decode a raw `u16` read from a DTA file as a Stata int.
+    ///
+    /// The decoding rules depend on `release`:
+    ///
+    /// - **DTA 113+**: values in `−32,767..=32,740` are data; `32,741..=32,767`
+    ///   encode `.`, `.a`, …, `.z` respectively. `−32,768` is outside Stata's
+    ///   documented range but is treated as present.
+    /// - **Pre-DTA 113**: values in `−32,768..=32,766` are data; `32,767`
+    ///   encodes system missing (`.`). Tagged missings do not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StataError::NotMissingValue`] if the raw value is inside
+    /// the DTA 113+ missing range but does not match any of the 27
+    /// sentinel values (pre-113 files never produce this error).
+    pub fn from_raw(raw: u16, release: Release) -> Result<Self> {
+        let signed = raw.cast_signed();
+        if release.supports_tagged_missing() {
+            if signed > DTA_113_MAX_INT16 {
+                Ok(Self::Missing(MissingValue::try_from(raw)?))
+            } else {
+                Ok(Self::Present(signed))
+            }
+        } else if raw == MISSING_INT_SYSTEM_PRE_113 {
+            Ok(Self::Missing(MissingValue::System))
         } else {
             Ok(Self::Present(signed))
         }
     }
-}
 
-/// Convert a [`StataInt`] back to its raw `u16` DTA representation.
-///
-/// Present values are reinterpreted from signed `i16` to unsigned `u16`.
-/// Missing values are encoded as `0x7FE5` (`.`) through `0x7FFF` (`.z`).
-impl From<StataInt> for u16 {
-    fn from(value: StataInt) -> Self {
-        match value {
-            StataInt::Present(v) => v.cast_unsigned(),
-            StataInt::Missing(mv) => MISSING_INT_SYSTEM + u16::from(mv.code()),
+    /// Encode this value as a raw `u16` for a DTA file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
+    /// tagged missing (`.a`–`.z`) and `release` is pre-113.
+    pub fn to_raw(self, release: Release) -> Result<u16> {
+        match self {
+            Self::Present(v) => Ok(v.cast_unsigned()),
+            Self::Missing(mv) => {
+                if release.supports_tagged_missing() {
+                    Ok(MISSING_INT_SYSTEM_113 + u16::from(mv.code()))
+                } else if mv == MissingValue::System {
+                    Ok(MISSING_INT_SYSTEM_PRE_113)
+                } else {
+                    Err(StataError::TaggedMissingUnsupported)
+                }
+            }
         }
     }
 }
@@ -71,313 +102,212 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Present values
+    // DTA 113+ — Present values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn present_zero() {
-        assert_eq!(StataInt::try_from(0_u16).unwrap(), StataInt::Present(0));
-    }
-
-    #[test]
-    fn present_one() {
-        assert_eq!(StataInt::try_from(1_u16).unwrap(), StataInt::Present(1));
-    }
-
-    #[test]
-    fn present_max() {
+    fn v113_present_zero() {
         assert_eq!(
-            StataInt::try_from(0x7FE4_u16).unwrap(),
-            StataInt::Present(32_740)
+            StataInt::from_raw(0_u16, Release::V113).unwrap(),
+            StataInt::Present(0)
         );
     }
 
     #[test]
-    fn present_min() {
-        // 0x8001 as i16 = -32767
+    fn v113_present_max() {
         assert_eq!(
-            StataInt::try_from(0x8001_u16).unwrap(),
-            StataInt::Present(-32_767)
+            StataInt::from_raw(0x7FE4_u16, Release::V113).unwrap(),
+            StataInt::Present(32_740),
         );
     }
 
     #[test]
-    fn present_negative_one() {
+    fn v113_present_min() {
         assert_eq!(
-            StataInt::try_from(0xFFFF_u16).unwrap(),
-            StataInt::Present(-1)
+            StataInt::from_raw(0x8001_u16, Release::V113).unwrap(),
+            StataInt::Present(-32_767),
         );
     }
 
     #[test]
-    fn present_negative_32768() {
-        // 0x8000 as i16 = -32768; outside Stata's documented range but treated as present
+    fn v113_present_negative_one() {
         assert_eq!(
-            StataInt::try_from(0x8000_u16).unwrap(),
-            StataInt::Present(-32_768)
+            StataInt::from_raw(0xFFFF_u16, Release::V113).unwrap(),
+            StataInt::Present(-1),
+        );
+    }
+
+    #[test]
+    fn v113_present_negative_32768() {
+        assert_eq!(
+            StataInt::from_raw(0x8000_u16, Release::V113).unwrap(),
+            StataInt::Present(-32_768),
         );
     }
 
     // -----------------------------------------------------------------------
-    // Missing values
+    // DTA 113+ — Missing values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn missing_system() {
+    fn v113_missing_system() {
         assert_eq!(
-            StataInt::try_from(0x7FE5_u16).unwrap(),
+            StataInt::from_raw(0x7FE5_u16, Release::V113).unwrap(),
             StataInt::Missing(MissingValue::System),
         );
     }
 
     #[test]
-    fn missing_a() {
+    fn v113_missing_a() {
         assert_eq!(
-            StataInt::try_from(0x7FE6_u16).unwrap(),
+            StataInt::from_raw(0x7FE6_u16, Release::V113).unwrap(),
             StataInt::Missing(MissingValue::A),
         );
     }
 
     #[test]
-    fn missing_b() {
+    fn v113_missing_z() {
         assert_eq!(
-            StataInt::try_from(0x7FE7_u16).unwrap(),
-            StataInt::Missing(MissingValue::B),
-        );
-    }
-
-    #[test]
-    fn missing_c() {
-        assert_eq!(
-            StataInt::try_from(0x7FE8_u16).unwrap(),
-            StataInt::Missing(MissingValue::C),
-        );
-    }
-
-    #[test]
-    fn missing_d() {
-        assert_eq!(
-            StataInt::try_from(0x7FE9_u16).unwrap(),
-            StataInt::Missing(MissingValue::D),
-        );
-    }
-
-    #[test]
-    fn missing_e() {
-        assert_eq!(
-            StataInt::try_from(0x7FEA_u16).unwrap(),
-            StataInt::Missing(MissingValue::E),
-        );
-    }
-
-    #[test]
-    fn missing_f() {
-        assert_eq!(
-            StataInt::try_from(0x7FEB_u16).unwrap(),
-            StataInt::Missing(MissingValue::F),
-        );
-    }
-
-    #[test]
-    fn missing_g() {
-        assert_eq!(
-            StataInt::try_from(0x7FEC_u16).unwrap(),
-            StataInt::Missing(MissingValue::G),
-        );
-    }
-
-    #[test]
-    fn missing_h() {
-        assert_eq!(
-            StataInt::try_from(0x7FED_u16).unwrap(),
-            StataInt::Missing(MissingValue::H),
-        );
-    }
-
-    #[test]
-    fn missing_i() {
-        assert_eq!(
-            StataInt::try_from(0x7FEE_u16).unwrap(),
-            StataInt::Missing(MissingValue::I),
-        );
-    }
-
-    #[test]
-    fn missing_j() {
-        assert_eq!(
-            StataInt::try_from(0x7FEF_u16).unwrap(),
-            StataInt::Missing(MissingValue::J),
-        );
-    }
-
-    #[test]
-    fn missing_k() {
-        assert_eq!(
-            StataInt::try_from(0x7FF0_u16).unwrap(),
-            StataInt::Missing(MissingValue::K),
-        );
-    }
-
-    #[test]
-    fn missing_l() {
-        assert_eq!(
-            StataInt::try_from(0x7FF1_u16).unwrap(),
-            StataInt::Missing(MissingValue::L),
-        );
-    }
-
-    #[test]
-    fn missing_m() {
-        assert_eq!(
-            StataInt::try_from(0x7FF2_u16).unwrap(),
-            StataInt::Missing(MissingValue::M),
-        );
-    }
-
-    #[test]
-    fn missing_n() {
-        assert_eq!(
-            StataInt::try_from(0x7FF3_u16).unwrap(),
-            StataInt::Missing(MissingValue::N),
-        );
-    }
-
-    #[test]
-    fn missing_o() {
-        assert_eq!(
-            StataInt::try_from(0x7FF4_u16).unwrap(),
-            StataInt::Missing(MissingValue::O),
-        );
-    }
-
-    #[test]
-    fn missing_p() {
-        assert_eq!(
-            StataInt::try_from(0x7FF5_u16).unwrap(),
-            StataInt::Missing(MissingValue::P),
-        );
-    }
-
-    #[test]
-    fn missing_q() {
-        assert_eq!(
-            StataInt::try_from(0x7FF6_u16).unwrap(),
-            StataInt::Missing(MissingValue::Q),
-        );
-    }
-
-    #[test]
-    fn missing_r() {
-        assert_eq!(
-            StataInt::try_from(0x7FF7_u16).unwrap(),
-            StataInt::Missing(MissingValue::R),
-        );
-    }
-
-    #[test]
-    fn missing_s() {
-        assert_eq!(
-            StataInt::try_from(0x7FF8_u16).unwrap(),
-            StataInt::Missing(MissingValue::S),
-        );
-    }
-
-    #[test]
-    fn missing_t() {
-        assert_eq!(
-            StataInt::try_from(0x7FF9_u16).unwrap(),
-            StataInt::Missing(MissingValue::T),
-        );
-    }
-
-    #[test]
-    fn missing_u() {
-        assert_eq!(
-            StataInt::try_from(0x7FFA_u16).unwrap(),
-            StataInt::Missing(MissingValue::U),
-        );
-    }
-
-    #[test]
-    fn missing_v() {
-        assert_eq!(
-            StataInt::try_from(0x7FFB_u16).unwrap(),
-            StataInt::Missing(MissingValue::V),
-        );
-    }
-
-    #[test]
-    fn missing_w() {
-        assert_eq!(
-            StataInt::try_from(0x7FFC_u16).unwrap(),
-            StataInt::Missing(MissingValue::W),
-        );
-    }
-
-    #[test]
-    fn missing_x() {
-        assert_eq!(
-            StataInt::try_from(0x7FFD_u16).unwrap(),
-            StataInt::Missing(MissingValue::X),
-        );
-    }
-
-    #[test]
-    fn missing_y() {
-        assert_eq!(
-            StataInt::try_from(0x7FFE_u16).unwrap(),
-            StataInt::Missing(MissingValue::Y),
-        );
-    }
-
-    #[test]
-    fn missing_z() {
-        assert_eq!(
-            StataInt::try_from(0x7FFF_u16).unwrap(),
+            StataInt::from_raw(0x7FFF_u16, Release::V113).unwrap(),
             StataInt::Missing(MissingValue::Z),
         );
     }
 
     // -----------------------------------------------------------------------
-    // From<StataInt> for u16 — round-trip present values
+    // Pre-113 — Present values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn roundtrip_present_zero() {
-        assert_eq!(u16::from(StataInt::Present(0)), 0);
+    fn v104_present_32741_is_data() {
+        // In pre-113 int, 32,741 is valid data (not a missing sentinel).
+        assert_eq!(
+            StataInt::from_raw(0x7FE5_u16, Release::V104).unwrap(),
+            StataInt::Present(32_741),
+        );
     }
 
     #[test]
-    fn roundtrip_present_max() {
-        assert_eq!(u16::from(StataInt::Present(32_740)), 0x7FE4);
+    fn v104_present_32766_is_data() {
+        assert_eq!(
+            StataInt::from_raw(0x7FFE_u16, Release::V104).unwrap(),
+            StataInt::Present(32_766),
+        );
     }
 
     #[test]
-    fn roundtrip_present_min() {
-        assert_eq!(u16::from(StataInt::Present(-32_767)), 0x8001);
-    }
-
-    #[test]
-    fn roundtrip_present_negative_one() {
-        assert_eq!(u16::from(StataInt::Present(-1)), 0xFFFF);
+    fn v104_present_negative_32768() {
+        assert_eq!(
+            StataInt::from_raw(0x8000_u16, Release::V104).unwrap(),
+            StataInt::Present(-32_768),
+        );
     }
 
     // -----------------------------------------------------------------------
-    // From<StataInt> for u16 — round-trip missing values
+    // Pre-113 — Missing values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn roundtrip_missing_system() {
-        assert_eq!(u16::from(StataInt::Missing(MissingValue::System)), 0x7FE5);
+    fn v104_missing_system() {
+        assert_eq!(
+            StataInt::from_raw(0x7FFF_u16, Release::V104).unwrap(),
+            StataInt::Missing(MissingValue::System),
+        );
     }
 
     #[test]
-    fn roundtrip_missing_a() {
-        assert_eq!(u16::from(StataInt::Missing(MissingValue::A)), 0x7FE6);
+    fn v112_missing_system() {
+        assert_eq!(
+            StataInt::from_raw(0x7FFF_u16, Release::V112).unwrap(),
+            StataInt::Missing(MissingValue::System),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // to_raw — Present round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v113_to_raw_present_zero() {
+        assert_eq!(StataInt::Present(0).to_raw(Release::V113).unwrap(), 0);
     }
 
     #[test]
-    fn roundtrip_missing_z() {
-        assert_eq!(u16::from(StataInt::Missing(MissingValue::Z)), 0x7FFF);
+    fn v113_to_raw_present_max() {
+        assert_eq!(
+            StataInt::Present(32_740).to_raw(Release::V113).unwrap(),
+            0x7FE4,
+        );
+    }
+
+    #[test]
+    fn v113_to_raw_present_min() {
+        assert_eq!(
+            StataInt::Present(-32_767).to_raw(Release::V113).unwrap(),
+            0x8001,
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // to_raw — System missing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v113_to_raw_missing_system() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::System)
+                .to_raw(Release::V113)
+                .unwrap(),
+            0x7FE5,
+        );
+    }
+
+    #[test]
+    fn v104_to_raw_missing_system() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::System)
+                .to_raw(Release::V104)
+                .unwrap(),
+            0x7FFF,
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // to_raw — Tagged missings
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v113_to_raw_missing_a() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::A)
+                .to_raw(Release::V113)
+                .unwrap(),
+            0x7FE6,
+        );
+    }
+
+    #[test]
+    fn v113_to_raw_missing_z() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::Z)
+                .to_raw(Release::V113)
+                .unwrap(),
+            0x7FFF,
+        );
+    }
+
+    #[test]
+    fn v104_to_raw_missing_tagged_errors() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::A).to_raw(Release::V104),
+            Err(StataError::TaggedMissingUnsupported),
+        );
+    }
+
+    #[test]
+    fn v112_to_raw_missing_tagged_errors() {
+        assert_eq!(
+            StataInt::Missing(MissingValue::Z).to_raw(Release::V112),
+            Err(StataError::TaggedMissingUnsupported),
+        );
     }
 }

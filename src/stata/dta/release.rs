@@ -171,6 +171,34 @@ impl Release {
     pub(crate) fn supports_extended_observation_count(self) -> bool {
         self >= Self::V118
     }
+
+    /// Whether the format supports tagged missing values (`.a`–`.z`),
+    /// introduced in format 113.
+    ///
+    /// Earlier formats encode a single system missing value (`.`) only.
+    /// Attempting to write a tagged missing to a pre-113 file returns
+    /// a format error; attempting to read one is treated as a file
+    /// corruption signal by the integer decoders (pre-113 integer
+    /// sentinels have only one valid value per type).
+    #[must_use]
+    #[inline]
+    pub fn supports_tagged_missing(self) -> bool {
+        self >= Self::V113
+    }
+
+    /// Whether the format uses the legacy "magic 2^333" double missing
+    /// sentinel (formats 104 and 105 only).
+    ///
+    /// The bit pattern `0x54C0_0000_0000_0000` (= `2^333` ≈ 1.75e100)
+    /// falls well inside the valid IEEE-754 double range, so a simple
+    /// range check cannot catch it — it must be matched exactly.
+    /// Formats 106–111 switched to an out-of-range sentinel near
+    /// `+MAX_DOUBLE`, and 113+ uses NaN bit patterns.
+    #[must_use]
+    #[inline]
+    pub fn uses_magic_double_missing(self) -> bool {
+        self <= Self::V105
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +476,39 @@ mod tests {
     fn long_observation_count_118_plus() {
         assert!(Release::V118.supports_extended_observation_count());
         assert!(Release::V119.supports_extended_observation_count());
+    }
+
+    // -- supports_tagged_missing ---------------------------------------------
+
+    #[test]
+    fn supports_tagged_missing_pre_113() {
+        assert!(!Release::V104.supports_tagged_missing());
+        assert!(!Release::V105.supports_tagged_missing());
+        assert!(!Release::V111.supports_tagged_missing());
+        assert!(!Release::V112.supports_tagged_missing());
+    }
+
+    #[test]
+    fn supports_tagged_missing_113_plus() {
+        assert!(Release::V113.supports_tagged_missing());
+        assert!(Release::V114.supports_tagged_missing());
+        assert!(Release::V119.supports_tagged_missing());
+    }
+
+    // -- uses_magic_double_missing -------------------------------------------
+
+    #[test]
+    fn uses_magic_double_missing_104_105() {
+        assert!(Release::V104.uses_magic_double_missing());
+        assert!(Release::V105.uses_magic_double_missing());
+    }
+
+    #[test]
+    fn uses_magic_double_missing_106_plus() {
+        assert!(!Release::V106.uses_magic_double_missing());
+        assert!(!Release::V111.uses_magic_double_missing());
+        assert!(!Release::V113.uses_magic_double_missing());
+        assert!(!Release::V119.uses_magic_double_missing());
     }
 
     // -- type_list_entry_len ---------------------------------------------------

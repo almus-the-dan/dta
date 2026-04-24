@@ -6,8 +6,8 @@ use super::header::Header;
 use super::long_string_ref::LongStringRef;
 use super::long_string_writer::LongStringWriter;
 use super::record_format::{
-    encode_record_string, encode_u48, narrow_variable_index, observation_count_overflow_error,
-    validate_record_arity, validate_record_value_types,
+    encode_numeric, encode_record_string, encode_u48, narrow_variable_index,
+    observation_count_overflow_error, validate_record_arity, validate_record_value_types,
 };
 use super::release::Release;
 use super::schema::Schema;
@@ -205,6 +205,7 @@ impl<W: Write> RecordWriter<W> {
     ) -> Result<()> {
         let byte_order = self.header.byte_order();
         let release = self.header.release();
+        let position = self.state.position();
         // `validate_value_types` ran before any writes, so the
         // `value` variant is known to match `variable_type` — we
         // only need to dispatch on the value. `variable_type` is
@@ -212,23 +213,51 @@ impl<W: Write> RecordWriter<W> {
         // lives on it.
         match *value {
             Value::Byte(stata_value) => {
-                self.state.write_u8(u8::from(stata_value), Section::Records)
+                let raw = encode_numeric(
+                    stata_value.to_raw(release),
+                    release,
+                    variable_index,
+                    position,
+                )?;
+                self.state.write_u8(raw, Section::Records)
             }
             Value::Int(stata_value) => {
-                self.state
-                    .write_u16(u16::from(stata_value), byte_order, Section::Records)
+                let raw = encode_numeric(
+                    stata_value.to_raw(release),
+                    release,
+                    variable_index,
+                    position,
+                )?;
+                self.state.write_u16(raw, byte_order, Section::Records)
             }
             Value::Long(stata_value) => {
-                self.state
-                    .write_u32(u32::from(stata_value), byte_order, Section::Records)
+                let raw = encode_numeric(
+                    stata_value.to_raw(release),
+                    release,
+                    variable_index,
+                    position,
+                )?;
+                self.state.write_u32(raw, byte_order, Section::Records)
             }
             Value::Float(stata_value) => {
-                let bits = f32::from(stata_value).to_bits();
-                self.state.write_u32(bits, byte_order, Section::Records)
+                let raw = encode_numeric(
+                    stata_value.to_raw(release),
+                    release,
+                    variable_index,
+                    position,
+                )?;
+                self.state
+                    .write_u32(raw.to_bits(), byte_order, Section::Records)
             }
             Value::Double(stata_value) => {
-                let bits = f64::from(stata_value).to_bits();
-                self.state.write_u64(bits, byte_order, Section::Records)
+                let raw = encode_numeric(
+                    stata_value.to_raw(release),
+                    release,
+                    variable_index,
+                    position,
+                )?;
+                self.state
+                    .write_u64(raw.to_bits(), byte_order, Section::Records)
             }
             Value::String(text) => {
                 let VariableType::FixedString(width) = variable_type else {

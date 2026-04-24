@@ -1,80 +1,116 @@
 /// A value from a Stata "float" variable (4-byte IEEE 754 float).
 ///
-/// In DTA format 113+, a float is stored as four bytes (after endianness
-/// correction). Stata reserves specific NaN bit patterns as missing-value
-/// sentinels. If the bit pattern (as `u32`) is at least `0x7F00_0000`, the
-/// value encodes a missing value; otherwise it is present data.
+/// In DTA format 113+, Stata reserves specific NaN bit patterns at and above
+/// `0x7F00_0000` as missing-value sentinels (`.`, `.a`–`.z`). Values below
+/// that bit pattern are data.
+///
+/// In pre-113 formats, only bit patterns above `+MAX_VALID_FLOAT` (roughly
+/// `1.7014e38`) encode system missing (`.`); tagged missings are
+/// unrepresentable.
 ///
 /// # Examples
 ///
 /// ```
-/// use dta::stata::stata_float::StataFloat;
+/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
+/// use dta::stata::stata_float::StataFloat;
 ///
-/// let present = StataFloat::try_from(3.14_f32).unwrap();
+/// let present = StataFloat::from_raw(3.14_f32, Release::V117).unwrap();
 /// assert_eq!(present, StataFloat::Present(3.14));
 ///
-/// let missing = StataFloat::try_from(f32::from_bits(0x7F00_0000)).unwrap();
+/// let missing = StataFloat::from_raw(f32::from_bits(0x7F00_0000), Release::V117).unwrap();
 /// assert_eq!(missing, StataFloat::Missing(MissingValue::System));
 /// ```
+use super::dta::release::Release;
 use super::missing_value::MissingValue;
 use super::stata_error::{Result, StataError};
 
-/// Bit pattern at or above which an `f32` encodes a Stata missing value.
-const MISSING_FLOAT_SYSTEM: u32 = 0x7F00_0000;
+/// Bit pattern at or above which an `f32` encodes a Stata missing value in
+/// DTA 113+.
+const MISSING_FLOAT_SYSTEM_113: u32 = 0x7F00_0000;
 
-/// Bit pattern encoding tagged missing `.a` for `f32`.
-const MISSING_FLOAT_A: u32 = 0x7F00_0800;
+/// Bit pattern encoding tagged missing `.a` for `f32` in DTA 113+.
+const MISSING_FLOAT_A_113: u32 = 0x7F00_0800;
 
-/// Stride between consecutive tagged missing `f32` bit patterns.
+/// Stride between consecutive tagged missing `f32` bit patterns in DTA 113+.
 const MISSING_FLOAT_STRIDE: u32 = 0x0800;
+
+/// Bit pattern of the largest positive IEEE 754 single-precision value
+/// considered valid data in pre-113 formats. Anything greater is treated
+/// as system missing on read. Matches pandas' `OLD_VALID_RANGE` max for
+/// float32 (roughly `1.7014117e38`).
+const PRE_113_FLOAT_MAX_VALID_BITS: u32 = 0x7EFF_FFFF;
+
+/// Bit pattern emitted as system missing when writing a pre-113 file.
+/// Decodes to `1.7014118e38`, which the reader here and pandas both treat
+/// as missing via the range check above.
+const MISSING_FLOAT_SYSTEM_PRE_113: u32 = 0x7F00_0000;
 
 /// A Stata float: either a present `f32` value or a [`MissingValue`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StataFloat {
     /// A present data value.
     Present(f32),
-    /// A missing value (`.`, `.a`–`.z`).
+    /// A missing value (`.` in any release; `.a`–`.z` in DTA 113+ only).
     Missing(MissingValue),
 }
 
-/// Interpret an `f32` read from a DTA file as a Stata float.
-///
-/// If the bit pattern is at or above `0x7F00_0000`, the value is classified
-/// as missing. A NaN whose bit pattern falls in the missing range but does
-/// not match one of Stata's 27 specific patterns results in an error.
-impl TryFrom<f32> for StataFloat {
-    type Error = StataError;
-
-    fn try_from(value: f32) -> Result<Self> {
-        let bits = value.to_bits();
-        // Stata missing values are positive NaNs with sign bit 0.
-        // Negative values have the sign bit set (bit 31), making their
-        // unsigned bit pattern > 0x7F00_0000, so we must exclude them.
-        if bits & 0x8000_0000 == 0 && bits >= MISSING_FLOAT_SYSTEM {
-            Ok(Self::Missing(MissingValue::try_from(value)?))
+impl StataFloat {
+    /// Decode an `f32` read from a DTA file as a Stata float.
+    ///
+    /// The decoding rules depend on `release`:
+    ///
+    /// - **DTA 113+**: bit patterns at or above `0x7F00_0000` (sign bit
+    ///   clear) are missing. Exact matches of the 27 sentinel patterns
+    ///   map to `.`, `.a`, …, `.z`; other patterns in that range error.
+    /// - **Pre-DTA 113**: any positive value greater than the old
+    ///   valid-range maximum (~`1.7014117e38`) is treated as system
+    ///   missing (`.`). This matches pandas' `OLD_VALID_RANGE` check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StataError::NotMissingValue`] if a DTA 113+ value's bit
+    /// pattern falls in the missing range but does not match any of the
+    /// 27 sentinels. Pre-113 decoding never returns this error.
+    pub fn from_raw(raw: f32, release: Release) -> Result<Self> {
+        let bits = raw.to_bits();
+        let is_positive = bits & 0x8000_0000 == 0;
+        if release.supports_tagged_missing() {
+            if is_positive && bits >= MISSING_FLOAT_SYSTEM_113 {
+                Ok(Self::Missing(MissingValue::try_from(raw)?))
+            } else {
+                Ok(Self::Present(raw))
+            }
+        } else if is_positive && bits > PRE_113_FLOAT_MAX_VALID_BITS {
+            Ok(Self::Missing(MissingValue::System))
         } else {
-            Ok(Self::Present(value))
+            Ok(Self::Present(raw))
         }
     }
-}
 
-/// Convert a [`StataFloat`] back to its raw `f32` DTA representation.
-///
-/// Present values are returned as-is. Missing values are encoded as their
-/// specific NaN bit patterns.
-impl From<StataFloat> for f32 {
-    fn from(value: StataFloat) -> Self {
-        match value {
-            StataFloat::Present(v) => v,
-            StataFloat::Missing(mv) => {
-                let offset = u32::from(mv.code());
-                let bits = if offset == 0 {
-                    MISSING_FLOAT_SYSTEM
+    /// Encode this value as a raw `f32` for a DTA file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
+    /// tagged missing (`.a`–`.z`) and `release` is pre-113.
+    pub fn to_raw(self, release: Release) -> Result<f32> {
+        match self {
+            Self::Present(v) => Ok(v),
+            Self::Missing(mv) => {
+                if release.supports_tagged_missing() {
+                    let offset = u32::from(mv.code());
+                    let bits = if offset == 0 {
+                        MISSING_FLOAT_SYSTEM_113
+                    } else {
+                        MISSING_FLOAT_A_113 + (offset - 1) * MISSING_FLOAT_STRIDE
+                    };
+                    Ok(f32::from_bits(bits))
+                } else if mv == MissingValue::System {
+                    Ok(f32::from_bits(MISSING_FLOAT_SYSTEM_PRE_113))
                 } else {
-                    MISSING_FLOAT_A + (offset - 1) * MISSING_FLOAT_STRIDE
-                };
-                f32::from_bits(bits)
+                    Err(StataError::TaggedMissingUnsupported)
+                }
             }
         }
     }
@@ -86,340 +122,272 @@ mod tests {
     use float_cmp::assert_approx_eq;
 
     // -----------------------------------------------------------------------
-    // Present values
+    // DTA 113+ — Present values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn present_zero() {
+    fn v113_present_zero() {
         assert_eq!(
-            StataFloat::try_from(0.0_f32).unwrap(),
-            StataFloat::Present(0.0)
+            StataFloat::from_raw(0.0_f32, Release::V113).unwrap(),
+            StataFloat::Present(0.0),
         );
     }
 
     #[test]
-    fn present_negative_zero() {
+    fn v113_present_negative_zero() {
         assert_eq!(
-            StataFloat::try_from(-0.0_f32).unwrap(),
-            StataFloat::Present(-0.0)
+            StataFloat::from_raw(-0.0_f32, Release::V113).unwrap(),
+            StataFloat::Present(-0.0),
         );
     }
 
     #[test]
-    fn present_one() {
+    fn v113_present_one() {
         assert_eq!(
-            StataFloat::try_from(1.0_f32).unwrap(),
-            StataFloat::Present(1.0)
+            StataFloat::from_raw(1.0_f32, Release::V113).unwrap(),
+            StataFloat::Present(1.0),
         );
     }
 
     #[test]
-    fn present_negative() {
+    fn v113_present_negative() {
         assert_eq!(
-            StataFloat::try_from(-1.5_f32).unwrap(),
-            StataFloat::Present(-1.5)
+            StataFloat::from_raw(-1.5_f32, Release::V113).unwrap(),
+            StataFloat::Present(-1.5),
         );
     }
 
     #[test]
-    fn present_large() {
-        // Largest f32 below the missing threshold
-        let val = f32::from_bits(MISSING_FLOAT_SYSTEM - 1);
-        assert_eq!(StataFloat::try_from(val).unwrap(), StataFloat::Present(val));
+    fn v113_present_large_just_below_missing_range() {
+        let val = f32::from_bits(MISSING_FLOAT_SYSTEM_113 - 1);
+        assert_eq!(
+            StataFloat::from_raw(val, Release::V113).unwrap(),
+            StataFloat::Present(val),
+        );
     }
 
     #[test]
-    fn present_negative_infinity() {
+    fn v113_present_negative_infinity() {
         assert_eq!(
-            StataFloat::try_from(f32::NEG_INFINITY).unwrap(),
+            StataFloat::from_raw(f32::NEG_INFINITY, Release::V113).unwrap(),
             StataFloat::Present(f32::NEG_INFINITY),
         );
     }
 
     // -----------------------------------------------------------------------
-    // Error: unrecognised NaN
+    // DTA 113+ — Errors on unrecognized NaN bit patterns
     // -----------------------------------------------------------------------
 
     #[test]
-    fn error_non_stata_nan() {
-        // A NaN in the missing range but not matching any of Stata's 27 patterns
+    fn v113_error_non_stata_nan() {
         let val = f32::from_bits(0x7F00_0001);
-        assert_eq!(StataFloat::try_from(val), Err(StataError::NotMissingValue));
+        assert_eq!(
+            StataFloat::from_raw(val, Release::V113),
+            Err(StataError::NotMissingValue),
+        );
     }
 
     #[test]
-    fn error_positive_infinity() {
-        // +Inf has bits 0x7F800000 which is >= MISSING_FLOAT_SYSTEM but not a Stata pattern
+    fn v113_error_positive_infinity() {
         assert_eq!(
-            StataFloat::try_from(f32::INFINITY),
-            Err(StataError::NotMissingValue)
+            StataFloat::from_raw(f32::INFINITY, Release::V113),
+            Err(StataError::NotMissingValue),
         );
     }
 
     // -----------------------------------------------------------------------
-    // Missing values
+    // DTA 113+ — Missing values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn missing_system() {
+    fn v113_missing_system() {
         assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_0000)).unwrap(),
+            StataFloat::from_raw(f32::from_bits(0x7F00_0000), Release::V113).unwrap(),
             StataFloat::Missing(MissingValue::System),
         );
     }
 
     #[test]
-    fn missing_a() {
+    fn v113_missing_a() {
         assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_0800)).unwrap(),
+            StataFloat::from_raw(f32::from_bits(0x7F00_0800), Release::V113).unwrap(),
             StataFloat::Missing(MissingValue::A),
         );
     }
 
     #[test]
-    fn missing_b() {
+    fn v113_missing_z() {
         assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_1000)).unwrap(),
-            StataFloat::Missing(MissingValue::B),
-        );
-    }
-
-    #[test]
-    fn missing_c() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_1800)).unwrap(),
-            StataFloat::Missing(MissingValue::C),
-        );
-    }
-
-    #[test]
-    fn missing_d() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_2000)).unwrap(),
-            StataFloat::Missing(MissingValue::D),
-        );
-    }
-
-    #[test]
-    fn missing_e() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_2800)).unwrap(),
-            StataFloat::Missing(MissingValue::E),
-        );
-    }
-
-    #[test]
-    fn missing_f() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_3000)).unwrap(),
-            StataFloat::Missing(MissingValue::F),
-        );
-    }
-
-    #[test]
-    fn missing_g() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_3800)).unwrap(),
-            StataFloat::Missing(MissingValue::G),
-        );
-    }
-
-    #[test]
-    fn missing_h() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_4000)).unwrap(),
-            StataFloat::Missing(MissingValue::H),
-        );
-    }
-
-    #[test]
-    fn missing_i() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_4800)).unwrap(),
-            StataFloat::Missing(MissingValue::I),
-        );
-    }
-
-    #[test]
-    fn missing_j() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_5000)).unwrap(),
-            StataFloat::Missing(MissingValue::J),
-        );
-    }
-
-    #[test]
-    fn missing_k() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_5800)).unwrap(),
-            StataFloat::Missing(MissingValue::K),
-        );
-    }
-
-    #[test]
-    fn missing_l() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_6000)).unwrap(),
-            StataFloat::Missing(MissingValue::L),
-        );
-    }
-
-    #[test]
-    fn missing_m() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_6800)).unwrap(),
-            StataFloat::Missing(MissingValue::M),
-        );
-    }
-
-    #[test]
-    fn missing_n() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_7000)).unwrap(),
-            StataFloat::Missing(MissingValue::N),
-        );
-    }
-
-    #[test]
-    fn missing_o() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_7800)).unwrap(),
-            StataFloat::Missing(MissingValue::O),
-        );
-    }
-
-    #[test]
-    fn missing_p() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_8000)).unwrap(),
-            StataFloat::Missing(MissingValue::P),
-        );
-    }
-
-    #[test]
-    fn missing_q() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_8800)).unwrap(),
-            StataFloat::Missing(MissingValue::Q),
-        );
-    }
-
-    #[test]
-    fn missing_r() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_9000)).unwrap(),
-            StataFloat::Missing(MissingValue::R),
-        );
-    }
-
-    #[test]
-    fn missing_s() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_9800)).unwrap(),
-            StataFloat::Missing(MissingValue::S),
-        );
-    }
-
-    #[test]
-    fn missing_t() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_A000)).unwrap(),
-            StataFloat::Missing(MissingValue::T),
-        );
-    }
-
-    #[test]
-    fn missing_u() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_A800)).unwrap(),
-            StataFloat::Missing(MissingValue::U),
-        );
-    }
-
-    #[test]
-    fn missing_v() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_B000)).unwrap(),
-            StataFloat::Missing(MissingValue::V),
-        );
-    }
-
-    #[test]
-    fn missing_w() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_B800)).unwrap(),
-            StataFloat::Missing(MissingValue::W),
-        );
-    }
-
-    #[test]
-    fn missing_x() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_C000)).unwrap(),
-            StataFloat::Missing(MissingValue::X),
-        );
-    }
-
-    #[test]
-    fn missing_y() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_C800)).unwrap(),
-            StataFloat::Missing(MissingValue::Y),
-        );
-    }
-
-    #[test]
-    fn missing_z() {
-        assert_eq!(
-            StataFloat::try_from(f32::from_bits(0x7F00_D000)).unwrap(),
+            StataFloat::from_raw(f32::from_bits(0x7F00_D000), Release::V113).unwrap(),
             StataFloat::Missing(MissingValue::Z),
         );
     }
 
     // -----------------------------------------------------------------------
-    // From<StataFloat> for f32 — round-trip present values
+    // Pre-113 — Present values
     // -----------------------------------------------------------------------
 
     #[test]
-    fn roundtrip_present_zero() {
-        assert_approx_eq!(f32, f32::from(StataFloat::Present(0.0)), 0.0);
-    }
-
-    #[test]
-    fn roundtrip_present_positive() {
-        assert_approx_eq!(f32, f32::from(StataFloat::Present(1.5)), 1.5);
-    }
-
-    #[test]
-    fn roundtrip_present_negative() {
-        assert_approx_eq!(f32, f32::from(StataFloat::Present(-1.5)), -1.5);
-    }
-
-    // -----------------------------------------------------------------------
-    // From<StataFloat> for f32 — round-trip missing values
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn roundtrip_missing_system() {
+    fn v104_present_zero() {
         assert_eq!(
-            f32::from(StataFloat::Missing(MissingValue::System)).to_bits(),
-            0x7F00_0000
+            StataFloat::from_raw(0.0_f32, Release::V104).unwrap(),
+            StataFloat::Present(0.0),
         );
     }
 
     #[test]
-    fn roundtrip_missing_a() {
+    fn v104_present_normal() {
         assert_eq!(
-            f32::from(StataFloat::Missing(MissingValue::A)).to_bits(),
-            0x7F00_0800
+            StataFloat::from_raw(42.0_f32, Release::V104).unwrap(),
+            StataFloat::Present(42.0),
         );
     }
 
     #[test]
-    fn roundtrip_missing_z() {
+    fn v104_present_negative() {
         assert_eq!(
-            f32::from(StataFloat::Missing(MissingValue::Z)).to_bits(),
-            0x7F00_D000
+            StataFloat::from_raw(-1.5_f32, Release::V104).unwrap(),
+            StataFloat::Present(-1.5),
+        );
+    }
+
+    #[test]
+    fn v104_present_negative_infinity() {
+        // Negative infinity has sign bit set — never flagged as missing
+        // by the positive-only range check.
+        assert_eq!(
+            StataFloat::from_raw(f32::NEG_INFINITY, Release::V104).unwrap(),
+            StataFloat::Present(f32::NEG_INFINITY),
+        );
+    }
+
+    #[test]
+    fn v104_present_max_valid() {
+        let val = f32::from_bits(PRE_113_FLOAT_MAX_VALID_BITS);
+        assert_eq!(
+            StataFloat::from_raw(val, Release::V104).unwrap(),
+            StataFloat::Present(val),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Pre-113 — Missing values (range check)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v104_missing_system_canonical() {
+        // The actual bit pattern found in real v104 files.
+        assert_eq!(
+            StataFloat::from_raw(f32::from_bits(0x7F00_0000), Release::V104).unwrap(),
+            StataFloat::Missing(MissingValue::System),
+        );
+    }
+
+    #[test]
+    fn v104_missing_system_above_max() {
+        // Any positive value above valid-max is treated as missing.
+        assert_eq!(
+            StataFloat::from_raw(f32::from_bits(0x7F00_0001), Release::V104).unwrap(),
+            StataFloat::Missing(MissingValue::System),
+        );
+    }
+
+    #[test]
+    fn v104_missing_positive_infinity() {
+        assert_eq!(
+            StataFloat::from_raw(f32::INFINITY, Release::V104).unwrap(),
+            StataFloat::Missing(MissingValue::System),
+        );
+    }
+
+    #[test]
+    fn v112_missing_system() {
+        assert_eq!(
+            StataFloat::from_raw(f32::from_bits(0x7F00_0000), Release::V112).unwrap(),
+            StataFloat::Missing(MissingValue::System),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // to_raw — Present round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v113_to_raw_present_zero() {
+        assert_approx_eq!(
+            f32,
+            StataFloat::Present(0.0).to_raw(Release::V113).unwrap(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn v113_to_raw_present_normal() {
+        assert_approx_eq!(
+            f32,
+            StataFloat::Present(1.5).to_raw(Release::V113).unwrap(),
+            1.5
+        );
+    }
+
+    #[test]
+    fn v113_to_raw_present_negative() {
+        assert_approx_eq!(
+            f32,
+            StataFloat::Present(-1.5).to_raw(Release::V113).unwrap(),
+            -1.5
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // to_raw — Missing values
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn v113_to_raw_missing_system() {
+        let got = StataFloat::Missing(MissingValue::System)
+            .to_raw(Release::V113)
+            .unwrap();
+        assert_eq!(got.to_bits(), 0x7F00_0000);
+    }
+
+    #[test]
+    fn v113_to_raw_missing_a() {
+        let got = StataFloat::Missing(MissingValue::A)
+            .to_raw(Release::V113)
+            .unwrap();
+        assert_eq!(got.to_bits(), 0x7F00_0800);
+    }
+
+    #[test]
+    fn v113_to_raw_missing_z() {
+        let got = StataFloat::Missing(MissingValue::Z)
+            .to_raw(Release::V113)
+            .unwrap();
+        assert_eq!(got.to_bits(), 0x7F00_D000);
+    }
+
+    #[test]
+    fn v104_to_raw_missing_system() {
+        let got = StataFloat::Missing(MissingValue::System)
+            .to_raw(Release::V104)
+            .unwrap();
+        assert_eq!(got.to_bits(), 0x7F00_0000);
+    }
+
+    #[test]
+    fn v104_to_raw_missing_tagged_errors() {
+        assert_eq!(
+            StataFloat::Missing(MissingValue::A).to_raw(Release::V104),
+            Err(StataError::TaggedMissingUnsupported),
+        );
+    }
+
+    #[test]
+    fn v112_to_raw_missing_tagged_errors() {
+        assert_eq!(
+            StataFloat::Missing(MissingValue::Z).to_raw(Release::V112),
+            Err(StataError::TaggedMissingUnsupported),
         );
     }
 }
