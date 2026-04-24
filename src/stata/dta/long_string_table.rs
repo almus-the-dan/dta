@@ -232,17 +232,13 @@ impl LongStringTable {
     /// Returns the entry matching the `reference` if one exists.
     ///
     /// The returned [`LongString`] borrows payload bytes from the
-    /// table, so the table must outlive it. `encoding` is used to
-    /// decorate the returned entry so callers can round-trip bytes
-    /// through [`LongString::data_str`] without plumbing the encoding
-    /// separately — it does not affect lookup, which keys solely on
-    /// `(variable, observation)`.
+    /// table, so the table must outlive it. To decode the bytes as a
+    /// string, call
+    /// [`LongString::data_str`](super::long_string::LongString::data_str)
+    /// with the encoding reported by the reader that produced the
+    /// entry (see each reader's `encoding()` accessor).
     #[must_use]
-    pub fn get(
-        &self,
-        reference: &LongStringRef,
-        encoding: &'static encoding_rs::Encoding,
-    ) -> Option<LongString<'_>> {
+    pub fn get(&self, reference: &LongStringRef) -> Option<LongString<'_>> {
         let key = (reference.variable(), reference.observation());
         let entry = self.position.get(&key)?;
         Some(LongString::new(
@@ -250,7 +246,6 @@ impl LongStringTable {
             reference.observation(),
             entry.binary,
             Cow::Borrowed(&entry.data),
-            encoding,
         ))
     }
 
@@ -270,18 +265,10 @@ impl LongStringTable {
 
     /// Yields stored entries in `(variable, observation)` order,
     /// ready to be passed to
-    /// [`LongStringWriter::write_long_string`].
-    ///
-    /// The `encoding` argument is the writer's active encoding — it
-    /// decorates each yielded [`LongString`] so callers can round-trip
-    /// payload bytes through [`LongString::data_str`] without plumbing
-    /// the encoding separately. The returned iterator borrows `self`
-    /// and nothing else, so callers can freely invoke
+    /// [`LongStringWriter::write_long_string`]. The returned iterator
+    /// borrows `self` and nothing else, so callers can freely invoke
     /// `write_long_string` inside the loop.
-    pub fn iter<'a>(
-        &'a self,
-        encoding: &'static encoding_rs::Encoding,
-    ) -> impl Iterator<Item = LongString<'a>> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = LongString<'_>> + '_ {
         self.position
             .iter()
             .map(move |(&(variable, observation), entry)| {
@@ -290,7 +277,6 @@ impl LongStringTable {
                     observation,
                     entry.binary,
                     Cow::Borrowed(&*entry.data),
-                    encoding,
                 )
             })
     }
@@ -371,7 +357,7 @@ mod tests {
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
-        let stored = table.get(&reference, UTF_8).unwrap();
+        let stored = table.get(&reference).unwrap();
         assert_eq!(stored.data(), b"hello");
     }
 
@@ -398,7 +384,7 @@ mod tests {
         assert_eq!(reference.variable(), 3);
         assert_eq!(reference.observation(), 5);
         assert_eq!(table.len(), 1);
-        let stored = table.get(&reference, UTF_8).unwrap();
+        let stored = table.get(&reference).unwrap();
         assert_eq!(stored.data(), b"first");
     }
 
@@ -409,8 +395,8 @@ mod tests {
         table.get_or_insert(7, 9, b"hello", false);
 
         // Both keys resolve to the same payload.
-        let first = table.get(&LongStringRef::new(3, 5), UTF_8).unwrap();
-        let second = table.get(&LongStringRef::new(7, 9), UTF_8).unwrap();
+        let first = table.get(&LongStringRef::new(3, 5)).unwrap();
+        let second = table.get(&LongStringRef::new(7, 9)).unwrap();
         assert_eq!(first.data(), b"hello");
         assert_eq!(second.data(), b"hello");
     }
@@ -422,18 +408,8 @@ mod tests {
         let binary = table.get_or_insert(2, 2, b"\x00\x01\x02", true);
         assert_ne!(text, binary);
         assert_eq!(table.len(), 2);
-        assert!(
-            !table
-                .get(&LongStringRef::new(1, 1), UTF_8)
-                .unwrap()
-                .is_binary()
-        );
-        assert!(
-            table
-                .get(&LongStringRef::new(2, 2), UTF_8)
-                .unwrap()
-                .is_binary()
-        );
+        assert!(!table.get(&LongStringRef::new(1, 1)).unwrap().is_binary());
+        assert!(table.get(&LongStringRef::new(2, 2)).unwrap().is_binary());
     }
 
     // -- iter ---------------------------------------------------------------
@@ -447,7 +423,7 @@ mod tests {
         table.get_or_insert(1, 1, b"a1", false);
 
         let ordered: Vec<(u32, u64)> = table
-            .iter(UTF_8)
+            .iter()
             .map(|ls| (ls.variable(), ls.observation()))
             .collect();
         assert_eq!(ordered, vec![(1, 1), (1, 2), (2, 5), (3, 1)]);
@@ -459,7 +435,7 @@ mod tests {
         table.get_or_insert(1, 1, b"text", false);
         table.get_or_insert(2, 2, b"\x00\x01", true);
 
-        let long_strings: Vec<_> = table.iter(UTF_8).collect();
+        let long_strings: Vec<_> = table.iter().collect();
         assert_eq!(long_strings[0].data(), b"text");
         assert!(!long_strings[0].is_binary());
         assert_eq!(long_strings[1].data(), b"\x00\x01");
@@ -476,7 +452,7 @@ mod tests {
 
         assert!(table.remove(&reference));
         assert_eq!(table.len(), 0);
-        assert!(table.get(&reference, UTF_8).is_none());
+        assert!(table.get(&reference).is_none());
     }
 
     #[test]
@@ -511,7 +487,7 @@ mod tests {
         assert!(table.remove(&LongStringRef::new(1, 1)));
         assert_eq!(table.len(), 1);
         // The binary entry with identical bytes is unaffected.
-        let binary = table.get(&LongStringRef::new(2, 2), UTF_8).unwrap();
+        let binary = table.get(&LongStringRef::new(2, 2)).unwrap();
         assert!(binary.is_binary());
         assert_eq!(binary.data(), b"data");
     }
@@ -524,7 +500,7 @@ mod tests {
         table.get_or_insert(3, 5, b"hello", false);
 
         let reference = LongStringRef::new(3, 5);
-        let long_string = table.get(&reference, UTF_8).unwrap();
+        let long_string = table.get(&reference).unwrap();
         assert_eq!(long_string.variable(), 3);
         assert_eq!(long_string.observation(), 5);
         assert_eq!(long_string.data(), b"hello");
@@ -537,7 +513,7 @@ mod tests {
         table.get_or_insert(1, 1, b"only", false);
 
         let missing = LongStringRef::new(99, 99);
-        assert!(table.get(&missing, UTF_8).is_none());
+        assert!(table.get(&missing).is_none());
     }
 
     #[test]
@@ -546,44 +522,44 @@ mod tests {
         table.get_or_insert(2, 2, b"\x00\x01\x02", true);
 
         let reference = LongStringRef::new(2, 2);
-        let long_string = table.get(&reference, UTF_8).unwrap();
+        let long_string = table.get(&reference).unwrap();
         assert!(long_string.is_binary());
         assert_eq!(long_string.data(), b"\x00\x01\x02");
     }
 
     #[test]
-    fn get_uses_caller_supplied_encoding_for_decoding() {
+    fn data_str_uses_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
         let mut table = LongStringTable::for_writing();
         table.get_or_insert(1, 1, b"\x80", false);
 
         let reference = LongStringRef::new(1, 1);
         let decoded = table
-            .get(&reference, WINDOWS_1252)
+            .get(&reference)
             .unwrap()
-            .data_str()
+            .data_str(WINDOWS_1252)
             .unwrap()
             .into_owned();
         assert_eq!(decoded, "€");
 
-        assert!(table.get(&reference, UTF_8).unwrap().data_str().is_none());
+        assert!(table.get(&reference).unwrap().data_str(UTF_8).is_none());
     }
 
     #[test]
-    fn iter_captures_caller_supplied_encoding() {
+    fn iter_decoding_uses_caller_supplied_encoding() {
         // 0x80 is Euro sign in Windows-1252; invalid UTF-8.
         let mut table = LongStringTable::for_writing();
         table.get_or_insert(1, 1, b"\x80", false);
 
         let decoded = table
-            .iter(WINDOWS_1252)
+            .iter()
             .next()
             .unwrap()
-            .data_str()
+            .data_str(WINDOWS_1252)
             .unwrap()
             .into_owned();
         assert_eq!(decoded, "€");
 
-        assert!(table.iter(UTF_8).next().unwrap().data_str().is_none());
+        assert!(table.iter().next().unwrap().data_str(UTF_8).is_none());
     }
 }

@@ -90,7 +90,6 @@ impl<R: BufRead> LongStringReader<R> {
             return Ok(None);
         };
 
-        let encoding = self.state.encoding();
         let data = self
             .state
             .read_exact(gso_header.data_len, Section::LongStrings)?;
@@ -100,7 +99,6 @@ impl<R: BufRead> LongStringReader<R> {
             gso_header.observation,
             gso_header.is_binary(),
             Cow::Borrowed(data),
-            encoding,
         );
         Ok(Some(long_string))
     }
@@ -349,8 +347,6 @@ impl<R: BufRead + Seek> LongStringReader<R> {
 mod tests {
     use std::io::Cursor;
 
-    use encoding_rs::UTF_8;
-
     use super::*;
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_reader::DtaReader;
@@ -361,13 +357,7 @@ mod tests {
     use crate::stata::dta::variable_type::VariableType;
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(
-            variable,
-            observation,
-            false,
-            Cow::Borrowed(data.as_bytes()),
-            UTF_8,
-        )
+        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
     }
 
     fn build_file_with_long_strings(release: Release, entries: &[LongString<'_>]) -> Vec<u8> {
@@ -423,15 +413,15 @@ mod tests {
 
         assert_eq!(table.len(), 3);
         assert_eq!(
-            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(1, 1)).unwrap().data(),
             b"alpha"
         );
         assert_eq!(
-            table.get(&LongStringRef::new(1, 2), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(1, 2)).unwrap().data(),
             b"beta"
         );
         assert_eq!(
-            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(2, 1)).unwrap().data(),
             b"gamma"
         );
     }
@@ -446,7 +436,7 @@ mod tests {
         reader.read_remaining_into(&mut table).unwrap();
 
         let reference = LongStringRef::new(1, 5_000_000_000);
-        assert_eq!(table.get(&reference, UTF_8).unwrap().data(), b"wide obs");
+        assert_eq!(table.get(&reference).unwrap().data(), b"wide obs");
     }
 
     #[test]
@@ -476,13 +466,13 @@ mod tests {
         let mut table = LongStringTable::for_reading();
         reader.read_remaining_into(&mut table).unwrap();
         assert_eq!(table.len(), 2);
-        assert!(table.get(&LongStringRef::new(1, 1), UTF_8).is_none());
+        assert!(table.get(&LongStringRef::new(1, 1)).is_none());
         assert_eq!(
-            table.get(&LongStringRef::new(1, 2), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(1, 2)).unwrap().data(),
             b"beta"
         );
         assert_eq!(
-            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(2, 1)).unwrap().data(),
             b"gamma"
         );
     }
@@ -509,11 +499,11 @@ mod tests {
         reader.read_remaining_into(&mut table).unwrap();
         assert_eq!(table.len(), 2);
         assert_eq!(
-            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(1, 1)).unwrap().data(),
             b"pre-existing"
         );
         assert_eq!(
-            table.get(&LongStringRef::new(2, 2), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(2, 2)).unwrap().data(),
             b"from file"
         );
     }

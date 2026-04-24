@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use encoding_rs::Encoding;
 
+use super::string_decoding::decode_null_terminated;
+
 /// Type byte stored in a GSO block header, classifying the payload
 /// as binary bytes or as text that can be decoded using the file's
 /// encoding.
@@ -51,33 +53,27 @@ impl GsoType {
 /// one-based index of the first observation where the string content
 /// appeared, serving as a deduplication key rather than a row address.
 ///
-/// The raw bytes are stored as-is from the file. Use [`value_bytes`](Self::value_bytes)
-/// for raw access or [`value_str`](Self::value_str) to decode using
-/// the file's encoding.
+/// The raw bytes are stored as-is from the file. Use [`data`](Self::data)
+/// for raw access or [`data_str`](Self::data_str) to decode using a
+/// caller-supplied encoding — typically the one reported by the
+/// reader that produced this entry (see the `encoding()` accessor on
+/// each reader).
 #[derive(Debug, Clone)]
 pub struct LongString<'a> {
     variable: u32,
     observation: u64,
     binary: bool,
     data: Cow<'a, [u8]>,
-    encoding: &'static Encoding,
 }
 
 impl<'a> LongString<'a> {
     #[must_use]
-    pub(crate) fn new(
-        variable: u32,
-        observation: u64,
-        binary: bool,
-        data: Cow<'a, [u8]>,
-        encoding: &'static Encoding,
-    ) -> Self {
+    pub(crate) fn new(variable: u32, observation: u64, binary: bool, data: Cow<'a, [u8]>) -> Self {
         Self {
             variable,
             observation,
             binary,
             data,
-            encoding,
         }
     }
 
@@ -99,7 +95,7 @@ impl<'a> LongString<'a> {
 
     /// Whether this entry was stored as binary (GSO type `0x81`)
     /// rather than ASCII text (`0x82`). Binary entries typically
-    /// cannot be decoded as strings via [`value_str`](Self::value_str).
+    /// cannot be decoded as strings via [`data_str`](Self::data_str).
     #[must_use]
     #[inline]
     pub fn is_binary(&self) -> bool {
@@ -114,13 +110,16 @@ impl<'a> LongString<'a> {
         &self.data
     }
 
-    /// Decodes the entry as a string using the file's encoding,
+    /// Decodes the entry as a string using the given encoding,
     /// stripping any trailing null terminator.
     ///
-    /// Returns `None` if the bytes are not valid in the file's
+    /// Pass the encoding reported by the reader (or writer) that
+    /// produced this entry — for example `reader.encoding()`.
+    ///
+    /// Returns `None` if the bytes are not valid in the given
     /// encoding.
     #[must_use]
-    pub fn data_str(&self) -> Option<Cow<'_, str>> {
-        super::string_decoding::decode_null_terminated(&self.data, self.encoding)
+    pub fn data_str(&self, encoding: &'static Encoding) -> Option<Cow<'_, str>> {
+        decode_null_terminated(&self.data, encoding)
     }
 }

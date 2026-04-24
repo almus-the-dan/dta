@@ -85,7 +85,6 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             return Ok(None);
         };
 
-        let encoding = self.state.encoding();
         let data = self
             .state
             .read_exact(gso_header.data_len, Section::LongStrings)
@@ -96,7 +95,6 @@ impl<R: AsyncRead + Unpin> AsyncLongStringReader<R> {
             gso_header.observation,
             gso_header.is_binary(),
             Cow::Borrowed(data),
-            encoding,
         );
         Ok(Some(long_string))
     }
@@ -267,8 +265,6 @@ mod tests {
     use std::borrow::Cow;
     use std::io::Cursor;
 
-    use encoding_rs::UTF_8;
-
     use super::*;
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_reader::DtaReader;
@@ -278,13 +274,7 @@ mod tests {
     use crate::stata::dta::variable_type::VariableType;
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(
-            variable,
-            observation,
-            false,
-            Cow::Borrowed(data.as_bytes()),
-            UTF_8,
-        )
+        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
     }
 
     async fn read_one(
@@ -434,11 +424,11 @@ mod tests {
         reader.read_remaining_into(&mut table).await.unwrap();
         assert_eq!(table.len(), 3);
         assert_eq!(
-            table.get(&LongStringRef::new(1, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(1, 1)).unwrap().data(),
             b"alpha"
         );
         assert_eq!(
-            table.get(&LongStringRef::new(2, 1), UTF_8).unwrap().data(),
+            table.get(&LongStringRef::new(2, 1)).unwrap().data(),
             b"gamma"
         );
     }

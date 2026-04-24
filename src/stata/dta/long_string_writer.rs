@@ -119,8 +119,7 @@ impl<W: Write + Seek> LongStringWriter<W> {
     pub fn write_long_string_table(&mut self, table: &LongStringTable) -> Result<()> {
         // `LongStringTable::iter` borrows only the table, so we're
         // free to re-borrow `self` as `&mut` inside the loop body.
-        let encoding = self.state.encoding();
-        for long_string in table.iter(encoding) {
+        for long_string in table.iter() {
             self.write_long_string(&long_string)?;
         }
         Ok(())
@@ -224,8 +223,6 @@ mod tests {
     use std::borrow::Cow;
     use std::io::Cursor;
 
-    use encoding_rs::UTF_8;
-
     use super::*;
     use crate::stata::dta::byte_order::ByteOrder;
     use crate::stata::dta::dta_reader::DtaReader;
@@ -310,17 +307,11 @@ mod tests {
     }
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
-        LongString::new(
-            variable,
-            observation,
-            false,
-            Cow::Borrowed(data.as_bytes()),
-            UTF_8,
-        )
+        LongString::new(variable, observation, false, Cow::Borrowed(data.as_bytes()))
     }
 
     fn binary(variable: u32, observation: u64, data: &'static [u8]) -> LongString<'static> {
-        LongString::new(variable, observation, true, Cow::Borrowed(data), UTF_8)
+        LongString::new(variable, observation, true, Cow::Borrowed(data))
     }
 
     // -- V117 round-trips ---------------------------------------------------

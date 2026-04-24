@@ -2,6 +2,8 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use dta::stata::dta::dta_reader::DtaReader;
+use dta::stata::dta::long_string_table::LongStringTable;
+use dta::stata::dta::value::Value;
 
 #[test]
 #[ignore = "Using local files that require a license"]
@@ -60,13 +62,44 @@ fn read_dta_section_counts(path: &Path) {
     }
     eprintln!("Characteristic count: {characteristic_count}");
 
-    let mut record_reader = characteristic_reader
-        .into_record_reader()
-        .expect("failed to transition to record reader");
+    // Long strings (strls come before value labels in the file).
+    // Jump forward to the strL section, populate the resolve table,
+    // then jump to records.
+    let mut long_string_reader = characteristic_reader
+        .seek_long_strings()
+        .expect("failed to jump to long string reader");
+
+    let mut long_string_table = LongStringTable::for_reading();
+    long_string_reader
+        .read_remaining_into(&mut long_string_table)
+        .expect("Could not read long string table");
+
+    let mut record_reader = long_string_reader
+        .seek_records()
+        .expect("failed to jump to records");
 
     // Records
     let mut record_count = 0u64;
-    while let Some(_record) = record_reader.read_record().expect("failed to read record") {
+    let encoding = record_reader.encoding();
+    while let Some(record) = record_reader.read_record().expect("failed to read record") {
+        let mut value_strings = Vec::with_capacity(record.values().len());
+        for value in record.values() {
+            let value_str = match &value {
+                Value::Byte(b) => b.present().map_or("NA".to_string(), |b| b.to_string()),
+                Value::Int(i) => i.present().map_or("NA".to_string(), |b| b.to_string()),
+                Value::Long(l) => l.present().map_or("NA".to_string(), |b| b.to_string()),
+                Value::Float(f) => f.present().map_or("NA".to_string(), |b| format!("{b:0.4}")),
+                Value::Double(d) => d.present().map_or("NA".to_string(), |b| format!("{b:0.4}")),
+                Value::String(d) => d.to_string(),
+                Value::LongStringRef(r) => long_string_table
+                    .get(r)
+                    .and_then(|s| s.data_str(encoding).map(|s| s.to_string()))
+                    .unwrap_or("NA".to_string()),
+            };
+            value_strings.push(value_str);
+        }
+        let joined = value_strings.join("  |  ");
+        eprintln!("{joined}");
         record_count += 1;
     }
     eprintln!("Actual observation count: {record_count}");
