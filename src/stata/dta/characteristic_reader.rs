@@ -414,17 +414,16 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
 
     /// Seeks past characteristics and transitions to record reading.
     ///
-    /// For binary formats (where [`Release::is_xml_like`](super::release::Release::is_xml_like) returns
-    /// `false`), the data-section offset is not known until
-    /// characteristics have been read. Calling this before reading
-    /// characteristics for a binary format will seek to an incorrect
-    /// position.
+    /// For binary formats, the data-section offset is computed on
+    /// demand by skipping to the end of the characteristics section
+    /// if it hasn't already been determined.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
     pub fn seek_records(mut self) -> Result<RecordReader<R>> {
+        self.ensure_post_characteristics_offsets()?;
         let offset = self
             .state
             .section_offsets()
@@ -437,17 +436,16 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
 
     /// Seeks to the value-label section.
     ///
-    /// For binary formats (where [`Release::is_xml_like`](super::release::Release::is_xml_like) returns
-    /// `false`), the value-label offset is not known until
-    /// characteristics have been read. Calling this before reading
-    /// characteristics for a binary format will seek to an incorrect
-    /// position.
+    /// For binary formats, the value-label offset is computed on
+    /// demand by skipping to the end of the characteristics section
+    /// if it hasn't already been determined.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
     pub fn seek_value_labels(mut self) -> Result<ValueLabelReader<R>> {
+        self.ensure_post_characteristics_offsets()?;
         let offset = self
             .state
             .section_offsets()
@@ -463,12 +461,16 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
     /// For formats that do not support long strings (pre-117),
     /// the returned reader immediately yields `None` from
     /// [`read_long_string`](LongStringReader::read_long_string).
+    /// The data-section and value-label offsets are still computed
+    /// so that the returned reader's `seek_records` /
+    /// `seek_value_labels` work for binary formats.
     ///
     /// # Errors
     ///
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
     pub fn seek_long_strings(mut self) -> Result<LongStringReader<R>> {
+        self.ensure_post_characteristics_offsets()?;
         let long_strings_offset = self
             .state
             .section_offsets()
@@ -479,6 +481,31 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
         }
         let reader = LongStringReader::new(self.state, self.header, self.schema);
         Ok(reader)
+    }
+
+    /// Populates the data-section and value-label offsets for binary
+    /// formats by consuming any unread characteristics, so subsequent
+    /// seek-based navigation has correct positions. A no-op for XML
+    /// formats (which learn all offsets from the `<map>` section at
+    /// schema-read time) and for already-computed binary readers.
+    fn ensure_post_characteristics_offsets(&mut self) -> Result<()> {
+        if self.header.release().is_xml_like() {
+            return Ok(());
+        }
+        // `records()` is 0 exactly when the offsets haven't been
+        // computed yet — header/schema always occupy more than 0
+        // bytes, so 0 is never a valid records offset.
+        let offsets = self
+            .state
+            .section_offsets()
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::Records))?;
+        if offsets.records() != 0 {
+            return Ok(());
+        }
+        if !self.completed {
+            self.skip_to_end()?;
+        }
+        self.compute_binary_section_offsets()
     }
 }
 
