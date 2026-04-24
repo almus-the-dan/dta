@@ -18,12 +18,16 @@ use super::variable_type::VariableType;
 /// A single cell value from the data section of a DTA file.
 ///
 /// Numeric variants use the typed Stata representations that
-/// distinguish present values from missing values. String variants
-/// borrow from the reader's internal buffer for zero-copy access.
+/// distinguish present values from missing values. The
+/// [`String`](Self::String) variant carries a [`Cow<'a, str>`] —
+/// borrowed directly from the reader's row buffer on the zero-copy
+/// path (UTF-8 or ASCII content), and owned when the declared
+/// encoding required transcoding (e.g. Windows-1252 with accented
+/// characters).
 ///
 /// `LongStringRef` values are unresolved pointers into the strL
 /// section; use the [`LongStringReader`] to retrieve the actual text.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
     /// A 1-byte signed integer or missing value.
     Byte(StataByte),
@@ -36,12 +40,24 @@ pub enum Value<'a> {
     /// An 8-byte IEEE 754 double or missing value.
     Double(StataDouble),
     /// A fixed-length string, decoded and trimmed of null padding.
-    String(&'a str),
+    /// Borrowed from the row buffer when the bytes are already valid
+    /// UTF-8 (including pure ASCII); owned when the declared encoding
+    /// had to transcode.
+    String(Cow<'a, str>),
     /// A reference to a long string in the strL section.
     LongStringRef(LongStringRef),
 }
 
 impl<'a> Value<'a> {
+    /// Convenience constructor for `Value::String` from a borrowed
+    /// `&str`. Equivalent to `Value::String(Cow::Borrowed(s))` and
+    /// useful at call sites that hand the writer a string literal.
+    #[must_use]
+    #[inline]
+    pub fn string(s: &'a str) -> Self {
+        Self::String(Cow::Borrowed(s))
+    }
+
     /// Parses a single value from raw column bytes in a data row.
     ///
     /// The caller is responsible for slicing `column_bytes` to the
@@ -50,19 +66,20 @@ impl<'a> Value<'a> {
     /// `encoding`. The `release` is needed for strL reference
     /// layout, which differs between format 117 and 118+.
     ///
-    /// # String encoding limitation
+    /// # String encoding
     ///
-    /// `Value::String` borrows from `column_bytes`. This is
-    /// zero-copy for UTF-8 and ASCII, but non-UTF-8 encodings that
-    /// require transcoding (e.g., Windows-1252 with non-ASCII
-    /// characters) produce owned data that cannot be returned as a
-    /// reference. In that case this method returns an error.
+    /// String decoding uses the declared encoding. ASCII and native
+    /// UTF-8 content stays in the row buffer (`Cow::Borrowed`);
+    /// content that needs transcoding (e.g., Windows-1252 with
+    /// accented characters) is returned as `Cow::Owned`. Bytes that
+    /// don't decode at all in the declared encoding produce a
+    /// [`FormatErrorKind::InvalidEncoding`](super::dta_error::FormatErrorKind::InvalidEncoding).
     ///
     /// # Errors
     ///
     /// Returns an error if a numeric value has an unrecognized
-    /// missing-value bit pattern, if a string cannot be decoded, or
-    /// if a non-UTF-8 string requires an owned allocation.
+    /// missing-value bit pattern, or if a string's bytes are not
+    /// valid in the declared encoding.
     pub(crate) fn from_column_bytes(
         column_bytes: &'a [u8],
         variable_type: VariableType,
@@ -142,21 +159,14 @@ fn parse_fixed_string<'a>(
     column_bytes: &'a [u8],
     encoding: &'static Encoding,
 ) -> Result<Value<'a>> {
-    match decode_null_terminated(column_bytes, encoding) {
-        Some(Cow::Borrowed(s)) => Ok(Value::String(s)),
-        Some(Cow::Owned(_)) => Err(DtaError::io(
-            Section::Records,
-            std::io::Error::other(
-                "cannot return non-UTF-8 decoded string as a \
-                 reference; use read_record() for non-UTF-8 files \
-                 with non-ASCII strings",
-            ),
-        )),
-        None => Err(DtaError::io(
-            Section::Records,
-            std::io::Error::other("invalid string encoding in record"),
-        )),
-    }
+    decode_null_terminated(column_bytes, encoding)
+        .map(Value::String)
+        .ok_or_else(|| {
+            DtaError::io(
+                Section::Records,
+                std::io::Error::other("invalid string encoding in record"),
+            )
+        })
 }
 
 /// Parses a strL reference from 8 raw bytes.

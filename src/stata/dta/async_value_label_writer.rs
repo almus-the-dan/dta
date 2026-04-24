@@ -559,31 +559,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v104_rejects_negative_value() {
-        let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "nope")]));
+    async fn v104_negative_value_round_trips() {
+        // Pre-V108 values are `i16`, so negatives are valid.
+        let sets = round_trip(Release::V104, ByteOrder::LittleEndian, |mut w| async move {
+            let set = ValueLabelSet::new("neg".to_owned(), entries(&[(-1, "minus"), (0, "zero")]));
+            w.write_value_label_set(&set).await.unwrap();
+            w
+        })
+        .await;
+        assert_eq!(sets[0].entries()[0].value(), -1);
+        assert_eq!(sets[0].entries()[0].label(), "minus");
+        assert_eq!(sets[0].entries()[1].value(), 0);
+    }
+
+    #[tokio::test]
+    async fn v104_rejects_value_that_does_not_fit_in_i16() {
+        let set = ValueLabelSet::new("big".to_owned(), entries(&[(40_000, "too big")]));
         let mut writer = v104_value_label_writer().await;
         let error = writer.write_value_label_set(&set).await.unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
                 e.kind(),
-                FormatErrorKind::OldValueLabelValueOutOfRange { value: -1 }
+                FormatErrorKind::OldValueLabelValueOutOfRange { value: 40_000 }
             )
         ));
     }
 
     #[tokio::test]
-    async fn v104_rejects_duplicate_value() {
-        let set = ValueLabelSet::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
-        let mut writer = v104_value_label_writer().await;
-        let error = writer.write_value_label_set(&set).await.unwrap_err();
-        assert!(matches!(
-            error,
-            DtaError::Format(ref e) if matches!(
-                e.kind(),
-                FormatErrorKind::OldValueLabelValueOutOfRange { value: 1 }
-            )
-        ));
+    async fn v104_duplicate_values_round_trip() {
+        // Pre-V108 has no slot table; duplicates are preserved in
+        // order just like the modern layout.
+        let sets = round_trip(Release::V104, ByteOrder::LittleEndian, |mut w| async move {
+            let set = ValueLabelSet::new("dup".to_owned(), entries(&[(1, "a"), (1, "b")]));
+            w.write_value_label_set(&set).await.unwrap();
+            w
+        })
+        .await;
+        assert_eq!(sets[0].entries().len(), 2);
+        assert_eq!(sets[0].entries()[0].label(), "a");
+        assert_eq!(sets[0].entries()[1].label(), "b");
+    }
+
+    #[tokio::test]
+    async fn v107_round_trips_like_v104() {
+        // V105-V107 share the V104 layout. Cover one of them
+        // end-to-end so any re-split of this bucket shows up as a
+        // test failure.
+        let sets = round_trip(Release::V107, ByteOrder::LittleEndian, |mut w| async move {
+            let set = ValueLabelSet::new("old".to_owned(), entries(&[(-2, "neg"), (3, "three")]));
+            w.write_value_label_set(&set).await.unwrap();
+            w
+        })
+        .await;
+        assert_eq!(sets[0].entries()[0].value(), -2);
+        assert_eq!(sets[0].entries()[0].label(), "neg");
+        assert_eq!(sets[0].entries()[1].value(), 3);
     }
 
     #[tokio::test]

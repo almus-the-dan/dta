@@ -211,8 +211,8 @@ impl<W: Write> RecordWriter<W> {
         // only need to dispatch on the value. `variable_type` is
         // kept as a parameter only because the `FixedString` width
         // lives on it.
-        match *value {
-            Value::Byte(stata_value) => {
+        match value {
+            &Value::Byte(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -221,7 +221,7 @@ impl<W: Write> RecordWriter<W> {
                 )?;
                 self.state.write_u8(raw, Section::Records)
             }
-            Value::Int(stata_value) => {
+            &Value::Int(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -230,7 +230,7 @@ impl<W: Write> RecordWriter<W> {
                 )?;
                 self.state.write_u16(raw, byte_order, Section::Records)
             }
-            Value::Long(stata_value) => {
+            &Value::Long(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -239,7 +239,7 @@ impl<W: Write> RecordWriter<W> {
                 )?;
                 self.state.write_u32(raw, byte_order, Section::Records)
             }
-            Value::Float(stata_value) => {
+            &Value::Float(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -249,7 +249,7 @@ impl<W: Write> RecordWriter<W> {
                 self.state
                     .write_u32(raw.to_bits(), byte_order, Section::Records)
             }
-            Value::Double(stata_value) => {
+            &Value::Double(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -266,9 +266,9 @@ impl<W: Write> RecordWriter<W> {
                          validation should have caught this"
                     );
                 };
-                self.write_record_string(variable_index, text, width)
+                self.write_record_string(variable_index, text.as_ref(), width)
             }
-            Value::LongStringRef(long_string_ref) => {
+            &Value::LongStringRef(long_string_ref) => {
                 self.write_long_string_ref(long_string_ref, byte_order, release)
             }
         }
@@ -414,7 +414,7 @@ mod tests {
             let owned: Vec<OwnedValue> = record
                 .values()
                 .iter()
-                .copied()
+                .cloned()
                 .map(OwnedValue::from)
                 .collect();
             records.push(owned);
@@ -458,7 +458,7 @@ mod tests {
                 Value::Long(v) => Self::Long(v),
                 Value::Float(v) => Self::Float(v),
                 Value::Double(v) => Self::Double(v),
-                Value::String(s) => Self::String(s.to_owned()),
+                Value::String(s) => Self::String(s.into_owned()),
                 Value::LongStringRef(r) => Self::LongStringRef(r),
             }
         }
@@ -533,8 +533,8 @@ mod tests {
             .build()
             .unwrap();
         let bytes = round_trip(Release::V114, ByteOrder::LittleEndian, schema, |writer| {
-            writer.write_record(&[Value::String("Portland")]).unwrap();
-            writer.write_record(&[Value::String("NYC")]).unwrap();
+            writer.write_record(&[Value::string("Portland")]).unwrap();
+            writer.write_record(&[Value::string("NYC")]).unwrap();
         });
         let records = read_back(bytes);
         assert_eq!(records.len(), 2);
@@ -601,7 +601,7 @@ mod tests {
             .unwrap();
         let bytes = round_trip(Release::V117, ByteOrder::LittleEndian, schema, |writer| {
             writer
-                .write_record(&[Value::Int(StataInt::Present(7)), Value::String("hi")])
+                .write_record(&[Value::Int(StataInt::Present(7)), Value::string("hi")])
                 .unwrap();
         });
         let records = read_back(bytes);
@@ -628,7 +628,7 @@ mod tests {
             .build()
             .unwrap();
         let bytes = round_trip(Release::V118, ByteOrder::LittleEndian, schema, |writer| {
-            writer.write_record(&[Value::String("日本語")]).unwrap();
+            writer.write_record(&[Value::string("日本語")]).unwrap();
         });
         let records = read_back(bytes);
         assert_eq!(records[0][0], OwnedValue::String("日本語".to_owned()));
@@ -873,7 +873,7 @@ mod tests {
     #[test]
     fn fixed_string_too_long_errors() {
         let mut writer = scalar_record_writer(VariableType::FixedString(3), Release::V114);
-        let error = writer.write_record(&[Value::String("four")]).unwrap_err();
+        let error = writer.write_record(&[Value::string("four")]).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn non_latin_string_in_windows_1252_errors() {
         let mut writer = scalar_record_writer(VariableType::FixedString(10), Release::V114);
-        let error = writer.write_record(&[Value::String("日本語")]).unwrap_err();
+        let error = writer.write_record(&[Value::string("日本語")]).unwrap_err();
         assert!(matches!(
             error,
             DtaError::Format(ref e) if matches!(

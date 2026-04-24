@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `StataByte::present`, `StataInt::present`, `StataLong::present`, `StataFloat::present`, and `StataDouble::present` return `Some(T)` for a present value and `None` for any missing variant, letting callers elide the `match` when they only care about the underlying scalar.
+- `Value::string(&'a str)` convenience constructor that wraps the argument in `Cow::Borrowed` — useful when building records for the writer.
 
 ### Changed
 
@@ -19,10 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** The public error enums `DtaError`, `FormatErrorKind`, `Section`, `Field`, `Tag`, and `StataError` are now `#[non_exhaustive]`. Downstream `match` expressions on any of these must include a wildcard arm. Future releases can then add new variants (new sections, new format violations, new tagged missings) without breaking the public API.
 - **Breaking:** Pre-V108 value-label sets now round-trip the real Stata layout — `u16 n` + 9-byte name + 1-byte pad + `u16` values + 8-byte fixed-width labels — across V104, V105, V106, and V107. V104 files written by other tools now round-trip; files written by `dta` 0.2.0 with a V104 header are *not* readable by 0.3.0, since 0.2.0 used a self-consistent slot-indexed format that no other tool produces.
 - **Breaking:** `FormatErrorKind::OldValueLabelValueOutOfRange` now fires on values outside `i16` range (`-32768..=32767`). The old bound (`0..=8190`, the V104 slot-table maximum) no longer applies. Negative values and values up to 32767 are valid in pre-V108 sets, and duplicates are preserved in order.
+- **Breaking:** `Value::String` now holds `Cow<'a, str>` instead of `&'a str`, and `Value` no longer derives `Copy` (it still derives `Clone`). On the happy path (UTF-8 or ASCII content), the reader still borrows directly from the row buffer — `Cow::Borrowed`. Content that needs transcoding (e.g. pre-V118 files with non-ASCII Windows-1252 characters) is returned as `Cow::Owned` instead of failing. Construct from a `&str` literal with the new `Value::string` helper or `Cow::Borrowed` explicitly. Most read-side code that just wants `&str` works unchanged because `Cow<str>: Deref<Target = str>` — use `s.as_ref()` if you need an explicit `&str`.
 
 ### Fixed
 
 - Reading a real Stata or pandas V105-V107 file no longer fails with `DtaError::Io { section: ValueLabels, source: UnexpectedEof }`. 0.2.0 routed V105-V107 through the V108+ "modern" value-label path, which reads a `u32` length where the file stores a `u16`; the first length read then asked for gigabytes of payload from an 84-byte section. Pre-V108 files now follow the correct `u16 n` layout (see the related entry under "Changed").
+- Reading a record from a non-UTF-8 file no longer fails with `"cannot return non-UTF-8 decoded string as a reference; use read_record() for non-UTF-8 files with non-ASCII strings"` — that error was misleading (the suggested workaround routed through the same failing code path) and is now gone. Non-ASCII content in non-UTF-8 encodings is returned via the owned branch of `Cow<'a, str>` in `Value::String`.
 
 ### Removed
 

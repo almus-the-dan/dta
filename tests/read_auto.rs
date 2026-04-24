@@ -18,10 +18,7 @@ fn read_auto_dta_section_counts() {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
-            !name.contains("102")
-                && !name.contains("103")
-                // TODO: non-UTF-8 encoding fixtures — separate concern
-                && !name.contains("encoding")
+            !name.contains("102") && !name.contains("103")
         })
         .collect();
     paths.sort();

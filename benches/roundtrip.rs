@@ -66,9 +66,9 @@ fn build_template_values() -> Vec<Value<'static>> {
         Value::Int(StataInt::Present(17)),
         Value::Double(StataDouble::Present(98_765.43)),
         Value::Float(StataFloat::Present(4.25)),
-        Value::String("John Q. Public"),
-        Value::String("POSTED"),
-        Value::String("Monthly payment; see TXN-20240115-01 for reference."),
+        Value::string("John Q. Public"),
+        Value::string("POSTED"),
+        Value::string("Monthly payment; see TXN-20240115-01 for reference."),
     ]
 }
 

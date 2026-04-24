@@ -192,8 +192,8 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
         let byte_order = self.header.byte_order();
         let release = self.header.release();
         let position = self.state.position();
-        match *value {
-            Value::Byte(stata_value) => {
+        match value {
+            &Value::Byte(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -202,7 +202,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
                 )?;
                 self.state.write_u8(raw, Section::Records).await
             }
-            Value::Int(stata_value) => {
+            &Value::Int(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -213,7 +213,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
                     .write_u16(raw, byte_order, Section::Records)
                     .await
             }
-            Value::Long(stata_value) => {
+            &Value::Long(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -224,7 +224,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
                     .write_u32(raw, byte_order, Section::Records)
                     .await
             }
-            Value::Float(stata_value) => {
+            &Value::Float(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -235,7 +235,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
                     .write_u32(raw.to_bits(), byte_order, Section::Records)
                     .await
             }
-            Value::Double(stata_value) => {
+            &Value::Double(stata_value) => {
                 let raw = encode_numeric(
                     stata_value.to_raw(release),
                     release,
@@ -253,9 +253,10 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
                          validation should have caught this"
                     );
                 };
-                self.write_record_string(variable_index, text, width).await
+                self.write_record_string(variable_index, text.as_ref(), width)
+                    .await
             }
-            Value::LongStringRef(long_string_ref) => {
+            &Value::LongStringRef(long_string_ref) => {
                 self.write_long_string_ref(long_string_ref, byte_order, release)
                     .await
             }
@@ -359,7 +360,7 @@ mod tests {
                 Value::Long(v) => Self::Long(v),
                 Value::Float(v) => Self::Float(v),
                 Value::Double(v) => Self::Double(v),
-                Value::String(s) => Self::String(s.to_owned()),
+                Value::String(s) => Self::String(s.into_owned()),
                 Value::LongStringRef(r) => Self::LongStringRef(r),
             }
         }
@@ -417,7 +418,7 @@ mod tests {
             let owned: Vec<OwnedValue> = record
                 .values()
                 .iter()
-                .copied()
+                .cloned()
                 .map(OwnedValue::from)
                 .collect();
             parsed.push(owned);
@@ -495,7 +496,7 @@ mod tests {
             .add_variable(Variable::builder(VariableType::FixedString(10), "city").format("%10s"))
             .build()
             .unwrap();
-        let records = vec![vec![Value::String("Portland")], vec![Value::String("NYC")]];
+        let records = vec![vec![Value::string("Portland")], vec![Value::string("NYC")]];
         let parsed = round_trip(Release::V114, ByteOrder::LittleEndian, schema, records).await;
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0][0], OwnedValue::String("Portland".to_owned()));
@@ -550,7 +551,7 @@ mod tests {
             .add_variable(Variable::builder(VariableType::FixedString(5), "label").format("%5s"))
             .build()
             .unwrap();
-        let records = vec![vec![Value::Int(StataInt::Present(7)), Value::String("hi")]];
+        let records = vec![vec![Value::Int(StataInt::Present(7)), Value::string("hi")]];
         let parsed = round_trip(Release::V117, ByteOrder::LittleEndian, schema, records).await;
         assert_eq!(parsed[0][0], OwnedValue::Int(StataInt::Present(7)));
         assert_eq!(parsed[0][1], OwnedValue::String("hi".to_owned()));
@@ -572,7 +573,7 @@ mod tests {
             .add_variable(Variable::builder(VariableType::FixedString(16), "label").format("%16s"))
             .build()
             .unwrap();
-        let records = vec![vec![Value::String("日本語")]];
+        let records = vec![vec![Value::string("日本語")]];
         let parsed = round_trip(Release::V118, ByteOrder::LittleEndian, schema, records).await;
         assert_eq!(parsed[0][0], OwnedValue::String("日本語".to_owned()));
     }
@@ -743,7 +744,7 @@ mod tests {
     async fn fixed_string_too_long_errors() {
         let mut writer = scalar_record_writer(VariableType::FixedString(3), Release::V114).await;
         let error = writer
-            .write_record(&[Value::String("four")])
+            .write_record(&[Value::string("four")])
             .await
             .unwrap_err();
         assert!(matches!(
@@ -763,7 +764,7 @@ mod tests {
     async fn non_latin_string_in_windows_1252_errors() {
         let mut writer = scalar_record_writer(VariableType::FixedString(10), Release::V114).await;
         let error = writer
-            .write_record(&[Value::String("日本語")])
+            .write_record(&[Value::string("日本語")])
             .await
             .unwrap_err();
         assert!(matches!(

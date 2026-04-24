@@ -215,7 +215,7 @@ mod tests {
     use crate::stata::stata_int::StataInt;
 
     /// Writes `values` as a single record, then reads it back through
-    /// the async reader pipeline and calls `assert_fn` on the parsed
+    /// the async reader pipeline, and then calls `assert_fn` on the parsed
     /// record. The reader is kept alive across the call so
     /// `record.values()` can borrow the state's buffer.
     async fn read_one_record<F>(
@@ -295,12 +295,12 @@ mod tests {
             Release::V117,
             ByteOrder::LittleEndian,
             schema,
-            vec![Value::String("hi")],
+            vec![Value::string("hi")],
             |values| {
-                let Value::String(s) = values[0] else {
+                let Value::String(s) = &values[0] else {
                     panic!("expected string");
                 };
-                assert_eq!(s, "hi");
+                assert_eq!(s.as_ref(), "hi");
             },
         )
         .await;
