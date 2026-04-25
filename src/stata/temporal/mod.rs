@@ -36,6 +36,8 @@
 //! occasionally miscoded) in every downstream library. Centralizing
 //! the knowledge here is the value-add of being at this layer.
 
+#[cfg(feature = "chrono")]
+pub mod chrono_adapter;
 pub mod conversion;
 pub mod kind;
 

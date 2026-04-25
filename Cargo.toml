@@ -19,6 +19,7 @@ keywords = ["stata", "dta", "data", "statistics"]
 categories = ["parser-implementations", "encoding", "science"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 encoding_rs = "0.8.35"
 tokio = { version = "1", features = ["io-util", "fs"], optional = true }
 
@@ -40,6 +41,7 @@ name = "roundtrip"
 harness = false
 
 [features]
+chrono = ["dep:chrono"]
 tokio = ["dep:tokio"]
 
 [lints.rust]
