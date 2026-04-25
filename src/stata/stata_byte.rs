@@ -25,6 +25,8 @@
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
 use super::stata_error::{Result, StataError};
+use super::stata_int::StataInt;
+use super::stata_long::StataLong;
 
 /// Maximum valid (non-missing) Stata byte value for DTA 113+.
 const DTA_113_MAX_INT8: i8 = 100;
@@ -107,6 +109,36 @@ impl StataByte {
         match self {
             Self::Present(v) => Some(v),
             Self::Missing(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Narrowing conversions (TryFrom)
+// ---------------------------------------------------------------------------
+//
+// Mirror Rust's primitive `TryFrom<i16> for i8` and
+// `TryFrom<i32> for i8`. Missing values translate directly because
+// `MissingValue` is shared across every Stata numeric width.
+
+impl TryFrom<StataInt> for StataByte {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: StataInt) -> std::result::Result<Self, Self::Error> {
+        match value {
+            StataInt::Present(v) => Ok(Self::Present(i8::try_from(v)?)),
+            StataInt::Missing(mv) => Ok(Self::Missing(mv)),
+        }
+    }
+}
+
+impl TryFrom<StataLong> for StataByte {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: StataLong) -> std::result::Result<Self, Self::Error> {
+        match value {
+            StataLong::Present(v) => Ok(Self::Present(i8::try_from(v)?)),
+            StataLong::Missing(mv) => Ok(Self::Missing(mv)),
         }
     }
 }
@@ -367,5 +399,68 @@ mod tests {
     fn present_returns_none_for_missing() {
         assert_eq!(StataByte::Missing(MissingValue::System).present(), None);
         assert_eq!(StataByte::Missing(MissingValue::A).present(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // TryFrom<StataInt> / TryFrom<StataLong>
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn try_from_int_in_range() {
+        assert_eq!(
+            StataByte::try_from(StataInt::Present(42)).unwrap(),
+            StataByte::Present(42),
+        );
+    }
+
+    #[test]
+    fn try_from_int_at_i8_max() {
+        assert_eq!(
+            StataByte::try_from(StataInt::Present(127)).unwrap(),
+            StataByte::Present(127),
+        );
+    }
+
+    #[test]
+    fn try_from_int_above_i8_max_errors() {
+        assert!(StataByte::try_from(StataInt::Present(128)).is_err());
+    }
+
+    #[test]
+    fn try_from_int_below_i8_min_errors() {
+        assert!(StataByte::try_from(StataInt::Present(-129)).is_err());
+    }
+
+    #[test]
+    fn try_from_int_missing_translates_directly() {
+        assert_eq!(
+            StataByte::try_from(StataInt::Missing(MissingValue::System)).unwrap(),
+            StataByte::Missing(MissingValue::System),
+        );
+        assert_eq!(
+            StataByte::try_from(StataInt::Missing(MissingValue::Z)).unwrap(),
+            StataByte::Missing(MissingValue::Z),
+        );
+    }
+
+    #[test]
+    fn try_from_long_in_range() {
+        assert_eq!(
+            StataByte::try_from(StataLong::Present(-1)).unwrap(),
+            StataByte::Present(-1),
+        );
+    }
+
+    #[test]
+    fn try_from_long_above_i8_max_errors() {
+        assert!(StataByte::try_from(StataLong::Present(1_000_000)).is_err());
+    }
+
+    #[test]
+    fn try_from_long_missing_translates_directly() {
+        assert_eq!(
+            StataByte::try_from(StataLong::Missing(MissingValue::A)).unwrap(),
+            StataByte::Missing(MissingValue::A),
+        );
     }
 }

@@ -31,7 +31,11 @@
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
+use super::stata_byte::StataByte;
 use super::stata_error::{Result, StataError};
+use super::stata_float::StataFloat;
+use super::stata_int::StataInt;
+use super::stata_long::StataLong;
 
 /// Bit pattern at or above which an `f64` encodes a Stata missing value
 /// in DTA 113+.
@@ -144,6 +148,50 @@ impl StataDouble {
         match self {
             Self::Present(v) => Some(v),
             Self::Missing(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widening conversions (From)
+// ---------------------------------------------------------------------------
+//
+// Mirror Rust's primitive `From<i8>`, `From<i16>`, `From<i32>`, and
+// `From<f32>` for `f64`. Missing values translate directly because
+// `MissingValue` is shared across every Stata numeric width.
+
+impl From<StataByte> for StataDouble {
+    fn from(value: StataByte) -> Self {
+        match value {
+            StataByte::Present(v) => Self::Present(f64::from(v)),
+            StataByte::Missing(mv) => Self::Missing(mv),
+        }
+    }
+}
+
+impl From<StataInt> for StataDouble {
+    fn from(value: StataInt) -> Self {
+        match value {
+            StataInt::Present(v) => Self::Present(f64::from(v)),
+            StataInt::Missing(mv) => Self::Missing(mv),
+        }
+    }
+}
+
+impl From<StataLong> for StataDouble {
+    fn from(value: StataLong) -> Self {
+        match value {
+            StataLong::Present(v) => Self::Present(f64::from(v)),
+            StataLong::Missing(mv) => Self::Missing(mv),
+        }
+    }
+}
+
+impl From<StataFloat> for StataDouble {
+    fn from(value: StataFloat) -> Self {
+        match value {
+            StataFloat::Present(v) => Self::Present(f64::from(v)),
+            StataFloat::Missing(mv) => Self::Missing(mv),
         }
     }
 }
@@ -488,5 +536,74 @@ mod tests {
     fn present_returns_none_for_missing() {
         assert_eq!(StataDouble::Missing(MissingValue::System).present(), None);
         assert_eq!(StataDouble::Missing(MissingValue::A).present(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // From<StataByte> / From<StataInt> / From<StataLong> / From<StataFloat>
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_byte_present_widens() {
+        assert_eq!(
+            StataDouble::from(StataByte::Present(42)),
+            StataDouble::Present(42.0),
+        );
+    }
+
+    #[test]
+    fn from_byte_missing_translates_directly() {
+        assert_eq!(
+            StataDouble::from(StataByte::Missing(MissingValue::System)),
+            StataDouble::Missing(MissingValue::System),
+        );
+    }
+
+    #[test]
+    fn from_int_present_widens() {
+        assert_eq!(
+            StataDouble::from(StataInt::Present(-32_768)),
+            StataDouble::Present(-32_768.0),
+        );
+    }
+
+    #[test]
+    fn from_int_missing_translates_directly() {
+        assert_eq!(
+            StataDouble::from(StataInt::Missing(MissingValue::Z)),
+            StataDouble::Missing(MissingValue::Z),
+        );
+    }
+
+    #[test]
+    fn from_long_present_widens() {
+        assert_eq!(
+            StataDouble::from(StataLong::Present(2_147_483_647)),
+            StataDouble::Present(2_147_483_647.0),
+        );
+    }
+
+    #[test]
+    fn from_long_missing_translates_directly() {
+        assert_eq!(
+            StataDouble::from(StataLong::Missing(MissingValue::A)),
+            StataDouble::Missing(MissingValue::A),
+        );
+    }
+
+    #[test]
+    fn from_float_present_widens_losslessly() {
+        // 1000.0 is exactly representable in both f32 and f64.
+        assert_eq!(
+            StataDouble::from(StataFloat::Present(1000.0)),
+            StataDouble::Present(1000.0),
+        );
+    }
+
+    #[test]
+    fn from_float_missing_translates_directly() {
+        assert_eq!(
+            StataDouble::from(StataFloat::Missing(MissingValue::System)),
+            StataDouble::Missing(MissingValue::System),
+        );
     }
 }

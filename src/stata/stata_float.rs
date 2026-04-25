@@ -23,7 +23,9 @@
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
+use super::stata_byte::StataByte;
 use super::stata_error::{Result, StataError};
+use super::stata_int::StataInt;
 
 /// Bit pattern at or above which an `f32` encodes a Stata missing value in
 /// DTA 113+.
@@ -124,6 +126,35 @@ impl StataFloat {
         match self {
             Self::Present(v) => Some(v),
             Self::Missing(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widening conversions (From)
+// ---------------------------------------------------------------------------
+//
+// Mirror Rust's primitive `From<i8> for f32` and
+// `From<i16> for f32`. Rust does not provide `From<i32> for f32`
+// because not every `i32` is exactly representable in `f32`, so we
+// likewise omit `StataLong → StataFloat`. Missing values translate
+// directly because `MissingValue` is shared across every Stata
+// numeric width.
+
+impl From<StataByte> for StataFloat {
+    fn from(value: StataByte) -> Self {
+        match value {
+            StataByte::Present(v) => Self::Present(f32::from(v)),
+            StataByte::Missing(mv) => Self::Missing(mv),
+        }
+    }
+}
+
+impl From<StataInt> for StataFloat {
+    fn from(value: StataInt) -> Self {
+        match value {
+            StataInt::Present(v) => Self::Present(f32::from(v)),
+            StataInt::Missing(mv) => Self::Missing(mv),
         }
     }
 }
@@ -416,5 +447,41 @@ mod tests {
     fn present_returns_none_for_missing() {
         assert_eq!(StataFloat::Missing(MissingValue::System).present(), None);
         assert_eq!(StataFloat::Missing(MissingValue::A).present(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // From<StataByte> / From<StataInt>
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_byte_present_widens() {
+        assert_eq!(
+            StataFloat::from(StataByte::Present(42)),
+            StataFloat::Present(42.0),
+        );
+    }
+
+    #[test]
+    fn from_byte_missing_translates_directly() {
+        assert_eq!(
+            StataFloat::from(StataByte::Missing(MissingValue::System)),
+            StataFloat::Missing(MissingValue::System),
+        );
+    }
+
+    #[test]
+    fn from_int_present_widens() {
+        assert_eq!(
+            StataFloat::from(StataInt::Present(-32_768)),
+            StataFloat::Present(-32_768.0),
+        );
+    }
+
+    #[test]
+    fn from_int_missing_translates_directly() {
+        assert_eq!(
+            StataFloat::from(StataInt::Missing(MissingValue::Z)),
+            StataFloat::Missing(MissingValue::Z),
+        );
     }
 }

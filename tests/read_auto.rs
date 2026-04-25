@@ -5,10 +5,7 @@ use dta::stata::dta::long_string_table::LongStringTable;
 use dta::stata::dta::value::Value;
 use dta::stata::dta::value_label_table::ValueLabelTable;
 use dta::stata::dta::variable::Variable;
-use dta::stata::stata_byte::StataByte;
 use dta::stata::stata_double::StataDouble;
-use dta::stata::stata_float::StataFloat;
-use dta::stata::stata_int::StataInt;
 use dta::stata::stata_long::StataLong;
 use dta::stata::temporal::chrono_adapter::{StataTemporal, temporal_from_value};
 use encoding_rs::Encoding;
@@ -175,38 +172,43 @@ fn format_value(
         return format_temporal(temporal);
     }
 
+    // Widen the narrower integer / float storage variants into the
+    // widest of their family (Long / Double) via the lossless `From`
+    // impls, so we only need one integer-formatting path and one
+    // float-formatting path.
     match value {
-        Value::Byte(b) => match *b {
-            StataByte::Present(v) => {
-                enrich_with_value_label_i32(value_label_table, variable, i32::from(v))
-            }
-            StataByte::Missing(mv) => mv.to_string(),
-        },
-        Value::Int(i) => match *i {
-            StataInt::Present(v) => {
-                enrich_with_value_label_i32(value_label_table, variable, i32::from(v))
-            }
-            StataInt::Missing(mv) => mv.to_string(),
-        },
-        Value::Long(l) => match *l {
-            StataLong::Present(v) => enrich_with_value_label_i32(value_label_table, variable, v),
-            StataLong::Missing(mv) => mv.to_string(),
-        },
-        Value::Float(f) => match *f {
-            StataFloat::Present(v) => {
-                enrich_with_value_label_f64(value_label_table, variable, f64::from(v))
-            }
-            StataFloat::Missing(mv) => mv.to_string(),
-        },
-        Value::Double(d) => match *d {
-            StataDouble::Present(v) => enrich_with_value_label_f64(value_label_table, variable, v),
-            StataDouble::Missing(mv) => mv.to_string(),
-        },
+        Value::Byte(b) => format_long(value_label_table, variable, StataLong::from(*b)),
+        Value::Int(i) => format_long(value_label_table, variable, StataLong::from(*i)),
+        Value::Long(l) => format_long(value_label_table, variable, *l),
+        Value::Float(f) => format_double(value_label_table, variable, StataDouble::from(*f)),
+        Value::Double(d) => format_double(value_label_table, variable, *d),
         Value::String(d) => d.to_string(),
         Value::LongStringRef(r) => long_string_table
             .get(r)
             .and_then(|s| s.data_str(encoding).map(|s| s.to_string()))
             .unwrap_or("NA".to_string()),
+    }
+}
+
+fn format_long(
+    value_label_table: &ValueLabelTable,
+    variable: &Variable,
+    value: StataLong,
+) -> String {
+    match value {
+        StataLong::Present(v) => enrich_with_value_label_i32(value_label_table, variable, v),
+        StataLong::Missing(mv) => mv.to_string(),
+    }
+}
+
+fn format_double(
+    value_label_table: &ValueLabelTable,
+    variable: &Variable,
+    value: StataDouble,
+) -> String {
+    match value {
+        StataDouble::Present(v) => enrich_with_value_label_f64(value_label_table, variable, v),
+        StataDouble::Missing(mv) => mv.to_string(),
     }
 }
 

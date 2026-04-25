@@ -340,10 +340,10 @@ impl fmt::Display for FormatErrorKind {
                 "variable type {variable_type} is not supported by format {release}",
             ),
             Self::CharacteristicsUnsupported { release } => {
-                write!(f, "format {release} does not support characteristics",)
+                write!(f, "format {release} does not support characteristics")
             }
             Self::LongStringsUnsupported { release } => {
-                write!(f, "format {release} does not support long strings",)
+                write!(f, "format {release} does not support long strings")
             }
             Self::OldValueLabelValueOutOfRange { value } => write!(
                 f,

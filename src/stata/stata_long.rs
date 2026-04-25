@@ -25,7 +25,9 @@
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
+use super::stata_byte::StataByte;
 use super::stata_error::{Result, StataError};
+use super::stata_int::StataInt;
 
 /// Maximum valid (non-missing) Stata long value for DTA 113+.
 const DTA_113_MAX_INT32: i32 = 2_147_483_620;
@@ -107,6 +109,32 @@ impl StataLong {
         match self {
             Self::Present(v) => Some(v),
             Self::Missing(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Widening conversions (From)
+// ---------------------------------------------------------------------------
+//
+// Mirror Rust's primitive `From<i8> for i32` and
+// `From<i16> for i32`. Missing values translate directly because
+// `MissingValue` is shared across every Stata numeric width.
+
+impl From<StataByte> for StataLong {
+    fn from(value: StataByte) -> Self {
+        match value {
+            StataByte::Present(v) => Self::Present(i32::from(v)),
+            StataByte::Missing(mv) => Self::Missing(mv),
+        }
+    }
+}
+
+impl From<StataInt> for StataLong {
+    fn from(value: StataInt) -> Self {
+        match value {
+            StataInt::Present(v) => Self::Present(i32::from(v)),
+            StataInt::Missing(mv) => Self::Missing(mv),
         }
     }
 }
@@ -341,5 +369,41 @@ mod tests {
     fn present_returns_none_for_missing() {
         assert_eq!(StataLong::Missing(MissingValue::System).present(), None);
         assert_eq!(StataLong::Missing(MissingValue::A).present(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // From<StataByte> / From<StataInt>
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_byte_present_widens() {
+        assert_eq!(
+            StataLong::from(StataByte::Present(42)),
+            StataLong::Present(42),
+        );
+    }
+
+    #[test]
+    fn from_byte_missing_translates_directly() {
+        assert_eq!(
+            StataLong::from(StataByte::Missing(MissingValue::Z)),
+            StataLong::Missing(MissingValue::Z),
+        );
+    }
+
+    #[test]
+    fn from_int_present_widens() {
+        assert_eq!(
+            StataLong::from(StataInt::Present(-32_768)),
+            StataLong::Present(-32_768),
+        );
+    }
+
+    #[test]
+    fn from_int_missing_translates_directly() {
+        assert_eq!(
+            StataLong::from(StataInt::Missing(MissingValue::System)),
+            StataLong::Missing(MissingValue::System),
+        );
     }
 }
