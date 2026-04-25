@@ -18,14 +18,15 @@
 //!
 //! # Layering
 //!
-//! - [`TemporalKind`] + [`TemporalKind::from_format`]: classify a
-//!   Stata format string. Returns `None` for non-temporal formats
+//! - [`crate::stata::temporal::TemporalKind`] +
+//!   [`crate::stata::temporal::TemporalKind::from_format`]: classify
+//!   a Stata format string. Returns `None` for non-temporal formats
 //!   (`%9.0g`, `%-12s`, …) and ignores any display suffix
 //!   (`%tdCCYY-NN-DD`).
-//! - [`conversion`]: pure numeric helpers — `td_days_to_unix_days`,
-//!   `tc_millis_to_unix_millis`, and period decomposers. These
-//!   encode the Stata epoch and period boundaries once so consumers
-//!   don't redo the math.
+//! - [`crate::stata::temporal::conversion`]: pure numeric helpers —
+//!   `td_days_to_unix_days`, `tc_millis_to_unix_millis`, and period
+//!   decomposers. These encode the Stata epoch and period boundaries
+//!   once so consumers don't redo the math.
 //!
 //! # Why this lives in the crate
 //!

@@ -62,9 +62,8 @@ pub fn naive_date_from_td_days(stata_days: i32) -> Option<NaiveDate> {
 /// chrono's representable range.
 ///
 /// `%tC` (capital C, leap-second-adjusted) is not handled here —
-/// use [`TemporalKind::DateTimeLeap`](super::TemporalKind::DateTimeLeap)
-/// at the dispatcher layer to reject those rather than silently
-/// treat them as `%tc`.
+/// use [`TemporalKind::DateTimeLeap`] at the dispatcher layer to
+/// reject those rather than silently treat them as `%tc`.
 #[must_use]
 pub fn naive_date_time_from_tc_millis(stata_millis: f64) -> Option<NaiveDateTime> {
     let unix_millis = tc_millis_to_unix_millis(stata_millis)?;

@@ -78,13 +78,13 @@ impl<W: Write + Seek> LongStringWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Format`](DtaError::Format) with
+    /// Returns [`DtaError::Format`] with
     /// [`LongStringsUnsupported`](FormatErrorKind::LongStringsUnsupported)
     /// if the header's release is pre-V117 (no `<strls>` section),
     /// [`FieldTooLarge`](FormatErrorKind::FieldTooLarge) if the
     /// payload exceeds `u32::MAX` bytes or the observation index
     /// exceeds `u32::MAX` on a V117 file. Returns
-    /// [`DtaError::Io`](DtaError::Io) on sink failures.
+    /// [`DtaError::Io`] on sink failures.
     pub fn write_long_string(&mut self, long_string: &LongString<'_>) -> Result<()> {
         let release = self.header.release();
         if !release.supports_long_strings() {
@@ -136,7 +136,7 @@ impl<W: Write + Seek> LongStringWriter<W> {
     ///
     /// # Errors
     ///
-    /// Returns [`DtaError::Io`](DtaError::Io) on sink failures.
+    /// Returns [`DtaError::Io`] on sink failures.
     pub fn into_value_label_writer(mut self) -> Result<ValueLabelWriter<W>> {
         let release = self.header.release();
         let byte_order = self.header.byte_order();

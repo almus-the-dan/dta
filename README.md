@@ -189,7 +189,7 @@ Disabled by default. Enable it for async reading and writing with [tokio](https:
 
 ```toml
 [dependencies]
-dta = { version = "0.1", features = ["tokio"] }
+dta = { version = "0.4", features = ["tokio"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
 ```
 

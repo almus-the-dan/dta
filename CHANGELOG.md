@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-25
+
 ### Added
 
 - New `chrono` Cargo feature (off by default) bringing typed date/time conversions for Stata temporal values. The crate sits below pandas / haven / ReadStat in the stack, so the Stata-domain knowledge — 1960 epoch, milliseconds-vs-days, the case-sensitive `%tc`/`%tC` distinction, the legacy `%d` alias, and per-format storage-type expectations — is encoded once here instead of being reinvented by each downstream library.
