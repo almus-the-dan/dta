@@ -12,7 +12,11 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeDelta};
 
-use super::conversion::{tc_millis_to_unix_millis, td_days_to_unix_days};
+use super::conversion::{
+    tc_millis_to_unix_millis, td_days_to_unix_days, th_halves_to_year_half,
+    tm_months_to_year_month, tq_quarters_to_year_quarter, tw_weeks_to_year_week,
+};
+use super::kind::TemporalKind;
 use crate::stata::dta::value::Value;
 
 /// Converts a `%td` Stata day count (days since 1960-01-01) into a
@@ -88,18 +92,28 @@ pub fn naive_date_time_from_tc_millis(stata_millis: f64) -> Option<NaiveDateTime
 ///
 /// Missing-value sentinels (`.` and the tagged `.a`–`.z` from
 /// format 113+) all map to `None`. The dispatcher in
-/// [`temporal_from_value`](super) preserves the same convention.
+/// [`temporal_from_value`] preserves the same convention.
 #[must_use]
 pub fn naive_date_from_value(value: &Value<'_>) -> Option<NaiveDate> {
-    let stata_days = match value {
-        Value::Byte(byte_value) => i32::from(byte_value.present()?),
-        Value::Int(int_value) => i32::from(int_value.present()?),
-        Value::Long(long_value) => long_value.present()?,
-        Value::Float(_) | Value::Double(_) | Value::String(_) | Value::LongStringRef(_) => {
-            return None;
-        }
-    };
-    naive_date_from_td_days(stata_days)
+    naive_date_from_td_days(extract_stata_int32(value)?)
+}
+
+/// Extracts an `i32` from a Stata [`Value`], widening losslessly
+/// from the integer storage variants and refusing the rest.
+///
+/// Used by every "this Stata column stores an integer" temporal
+/// helper — `%td`, `%ty`, and the period formats (`%tw/%tm/%tq/%th`).
+/// Returns `None` for missing values and for [`Value::Float`] /
+/// [`Value::Double`] / [`Value::String`] / [`Value::LongStringRef`],
+/// which are never used to store these formats in well-formed
+/// files.
+fn extract_stata_int32(value: &Value<'_>) -> Option<i32> {
+    match value {
+        Value::Byte(byte_value) => byte_value.present().map(i32::from),
+        Value::Int(int_value) => int_value.present().map(i32::from),
+        Value::Long(long_value) => long_value.present(),
+        Value::Float(_) | Value::Double(_) | Value::String(_) | Value::LongStringRef(_) => None,
+    }
 }
 
 /// Converts a Stata [`Value`] into a [`NaiveDateTime`], treating it
@@ -112,7 +126,7 @@ pub fn naive_date_from_value(value: &Value<'_>) -> Option<NaiveDate> {
 /// | [`Value::Double`] | Present `f64` directly; missing → `None`  |
 /// | [`Value::Float`]  | Present `f32` widened to `f64`; missing → `None` |
 ///
-/// All other variants return `None`. `%tc` values exceed `i32`
+/// All other variants return `None`. `%tc` values exceed the `i32`
 /// range past ~25 days from the Stata epoch, so well-formed Stata
 /// files always use a floating-point storage type for `%tc`
 /// columns. The integer variants are rejected to surface
@@ -125,16 +139,145 @@ pub fn naive_date_from_value(value: &Value<'_>) -> Option<NaiveDate> {
 /// underlying conversion semantics, including non-finite handling.
 #[must_use]
 pub fn naive_date_time_from_value(value: &Value<'_>) -> Option<NaiveDateTime> {
-    let stata_millis = match value {
-        Value::Double(double_value) => double_value.present()?,
-        Value::Float(float_value) => f64::from(float_value.present()?),
+    naive_date_time_from_tc_millis(extract_stata_float64(value)?)
+}
+
+/// Extracts an `f64` from a Stata [`Value`], widening losslessly
+/// from [`Value::Float`] and refusing the integer storage variants.
+///
+/// Used by `%tc` conversion. Integer types are rejected because the
+/// `%tc` value range exceeds `i32` after ~25 days from the Stata
+/// epoch, so an integer-stored `%tc` column is malformed.
+fn extract_stata_float64(value: &Value<'_>) -> Option<f64> {
+    match value {
+        Value::Double(double_value) => double_value.present(),
+        Value::Float(float_value) => float_value.present().map(f64::from),
         Value::Byte(_)
         | Value::Int(_)
         | Value::Long(_)
         | Value::String(_)
-        | Value::LongStringRef(_) => return None,
-    };
-    naive_date_time_from_tc_millis(stata_millis)
+        | Value::LongStringRef(_) => None,
+    }
+}
+
+/// A Stata temporal value, classified by format and resolved into
+/// the most useful representation per kind.
+///
+/// Returned by [`temporal_from_value`] when a Stata cell carries a
+/// recognized temporal format. Date / datetime variants use
+/// [`chrono`] types; period variants return `(year, sub-period)`
+/// pairs since chrono has no native "year + week" or "year + half"
+/// type, and synthesizing a `NaiveDate` (e.g., the first day of the
+/// period) would commit consumers to a particular convention they
+/// may not want.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StataTemporal {
+    /// `%td` (or legacy `%d`) — a calendar date.
+    Date(NaiveDate),
+    /// `%tc` — a datetime, no leap-second adjustment.
+    DateTime(NaiveDateTime),
+    /// `%ty` — a calendar year (e.g., `2026`). The Stata value *is*
+    /// the year; no offset is applied.
+    Year(i32),
+    /// `%tm` — a year and 1-indexed month (`1..=12`).
+    YearMonth {
+        /// Calendar year.
+        year: i32,
+        /// Month, `1..=12`.
+        month: u8,
+    },
+    /// `%tq` — a year and 1-indexed quarter (`1..=4`).
+    YearQuarter {
+        /// Calendar year.
+        year: i32,
+        /// Quarter, `1..=4`.
+        quarter: u8,
+    },
+    /// `%th` — a year and 1-indexed half (`1..=2`).
+    YearHalf {
+        /// Calendar year.
+        year: i32,
+        /// Half, `1..=2`.
+        half: u8,
+    },
+    /// `%tw` — a year and 1-indexed Stata week (`1..=52`).
+    ///
+    /// Note that Stata weeks are *not* ISO weeks: week 1 of any
+    /// year always begins on January 1, and every year has exactly
+    /// 52 weeks (the last absorbs the trailing days).
+    YearWeek {
+        /// Calendar year.
+        year: i32,
+        /// Stata week number, `1..=52`.
+        week: u8,
+    },
+}
+
+/// Classifies `format` and converts `value` accordingly.
+///
+/// This is the convenience entry point for "I have a cell, tell me
+/// what it means as a date/time". The format string is parsed via
+/// [`TemporalKind::from_format`], the value is interpreted using
+/// the appropriate Layer 2 / Layer 1 helper, and the result is
+/// wrapped in the matching [`StataTemporal`] variant.
+///
+/// Returns `None` in any of these cases:
+///
+/// - `format` is not a recognized temporal format (numeric, string,
+///   empty, malformed).
+/// - `format` is `%tC` (leap-second-adjusted datetime) — chrono
+///   does not model leap seconds, and silently dropping them would
+///   produce times an hour or seconds off in some ranges. Drop to
+///   Layer 1 and decide your own policy if you need this.
+/// - The cell holds a Stata missing-value sentinel (`.` or
+///   `.a`–`.z`).
+/// - The cell's storage type doesn't match what `format` expects
+///   (e.g., a `%td` cell stored as [`Value::Double`], or a `%tc`
+///   cell stored as [`Value::Long`]). Mismatches almost always
+///   indicate upstream-pipeline bugs and are surfaced rather than
+///   coerced.
+/// - Conversion produces an out-of-range chrono value (only
+///   triggered by extreme inputs far outside Stata-typical data).
+///
+/// # Examples
+///
+/// ```
+/// use chrono::NaiveDate;
+/// use dta::stata::dta::value::Value;
+/// use dta::stata::stata_long::StataLong;
+/// use dta::stata::temporal::chrono_adapter::{StataTemporal, temporal_from_value};
+///
+/// let cell = Value::Long(StataLong::Present(0));
+/// assert_eq!(
+///     temporal_from_value(&cell, "%td"),
+///     Some(StataTemporal::Date(NaiveDate::from_ymd_opt(1960, 1, 1).unwrap())),
+/// );
+/// ```
+#[must_use]
+pub fn temporal_from_value(value: &Value<'_>, format: &str) -> Option<StataTemporal> {
+    match TemporalKind::from_format(format)? {
+        TemporalKind::Date => naive_date_from_value(value).map(StataTemporal::Date),
+        TemporalKind::DateTime => naive_date_time_from_value(value).map(StataTemporal::DateTime),
+        TemporalKind::DateTimeLeap => None,
+        TemporalKind::Year => extract_stata_int32(value).map(StataTemporal::Year),
+        TemporalKind::Month => {
+            let (year, month) = tm_months_to_year_month(extract_stata_int32(value)?);
+            Some(StataTemporal::YearMonth { year, month })
+        }
+        TemporalKind::Quarter => {
+            let (year, quarter) = tq_quarters_to_year_quarter(extract_stata_int32(value)?);
+            Some(StataTemporal::YearQuarter { year, quarter })
+        }
+        TemporalKind::HalfYear => {
+            let (year, half) = th_halves_to_year_half(extract_stata_int32(value)?);
+            Some(StataTemporal::YearHalf { year, half })
+        }
+        TemporalKind::Week => {
+            let (year, week) = tw_weeks_to_year_week(extract_stata_int32(value)?);
+            Some(StataTemporal::YearWeek { year, week })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -510,6 +653,211 @@ mod tests {
         fn long_string_ref_is_none() {
             let value = Value::LongStringRef(LongStringRef::new(1, 1));
             assert_eq!(naive_date_time_from_value(&value), None);
+        }
+    }
+
+    // -- temporal_from_value -------------------------------------------------
+
+    mod dispatcher {
+        use super::super::*;
+        use crate::stata::missing_value::MissingValue;
+        use crate::stata::stata_double::StataDouble;
+        use crate::stata::stata_int::StataInt;
+        use crate::stata::stata_long::StataLong;
+
+        #[test]
+        fn td_dispatches_to_date() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(
+                temporal_from_value(&value, "%td"),
+                Some(StataTemporal::Date(
+                    NaiveDate::from_ymd_opt(1960, 1, 1).unwrap()
+                )),
+            );
+        }
+
+        #[test]
+        fn td_with_display_suffix_still_dispatches() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(
+                temporal_from_value(&value, "%tdCCYY-NN-DD"),
+                Some(StataTemporal::Date(
+                    NaiveDate::from_ymd_opt(1960, 1, 1).unwrap()
+                )),
+            );
+        }
+
+        #[test]
+        fn legacy_d_dispatches_to_date() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(
+                temporal_from_value(&value, "%d"),
+                Some(StataTemporal::Date(
+                    NaiveDate::from_ymd_opt(1960, 1, 1).unwrap()
+                )),
+            );
+        }
+
+        #[test]
+        fn tc_dispatches_to_datetime() {
+            let value = Value::Double(StataDouble::Present(0.0));
+            let expected = NaiveDate::from_ymd_opt(1960, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            assert_eq!(
+                temporal_from_value(&value, "%tc"),
+                Some(StataTemporal::DateTime(expected)),
+            );
+        }
+
+        #[test]
+        fn tc_leap_returns_none() {
+            // Even with a perfectly valid Double, %tC is refused
+            // because chrono can't model leap seconds.
+            let value = Value::Double(StataDouble::Present(0.0));
+            assert_eq!(temporal_from_value(&value, "%tC"), None);
+        }
+
+        #[test]
+        fn ty_dispatches_to_year() {
+            let value = Value::Int(StataInt::Present(2026));
+            assert_eq!(
+                temporal_from_value(&value, "%ty"),
+                Some(StataTemporal::Year(2026)),
+            );
+        }
+
+        #[test]
+        fn tm_dispatches_to_year_month() {
+            let value = Value::Int(StataInt::Present(0));
+            assert_eq!(
+                temporal_from_value(&value, "%tm"),
+                Some(StataTemporal::YearMonth {
+                    year: 1960,
+                    month: 1
+                }),
+            );
+        }
+
+        #[test]
+        fn tm_negative_offset_decomposes_correctly() {
+            let value = Value::Int(StataInt::Present(-1));
+            assert_eq!(
+                temporal_from_value(&value, "%tm"),
+                Some(StataTemporal::YearMonth {
+                    year: 1959,
+                    month: 12
+                }),
+            );
+        }
+
+        #[test]
+        fn tq_dispatches_to_year_quarter() {
+            let value = Value::Int(StataInt::Present(5));
+            assert_eq!(
+                temporal_from_value(&value, "%tq"),
+                Some(StataTemporal::YearQuarter {
+                    year: 1961,
+                    quarter: 2
+                }),
+            );
+        }
+
+        #[test]
+        fn th_dispatches_to_year_half() {
+            let value = Value::Int(StataInt::Present(3));
+            assert_eq!(
+                temporal_from_value(&value, "%th"),
+                Some(StataTemporal::YearHalf {
+                    year: 1961,
+                    half: 2
+                }),
+            );
+        }
+
+        #[test]
+        fn tw_dispatches_to_year_week() {
+            let value = Value::Int(StataInt::Present(52));
+            assert_eq!(
+                temporal_from_value(&value, "%tw"),
+                Some(StataTemporal::YearWeek {
+                    year: 1961,
+                    week: 1
+                }),
+            );
+        }
+
+        // -- non-temporal formats --------------------------------------------
+
+        #[test]
+        fn numeric_format_returns_none() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(temporal_from_value(&value, "%9.0g"), None);
+        }
+
+        #[test]
+        fn string_format_returns_none() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(temporal_from_value(&value, "%-12s"), None);
+        }
+
+        #[test]
+        fn empty_format_returns_none() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(temporal_from_value(&value, ""), None);
+        }
+
+        #[test]
+        fn malformed_format_returns_none() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(temporal_from_value(&value, "%t"), None);
+            assert_eq!(temporal_from_value(&value, "%tx"), None);
+        }
+
+        // -- missing values --------------------------------------------------
+
+        #[test]
+        fn missing_long_with_td_returns_none() {
+            let value = Value::Long(StataLong::Missing(MissingValue::System));
+            assert_eq!(temporal_from_value(&value, "%td"), None);
+        }
+
+        #[test]
+        fn missing_double_with_tc_returns_none() {
+            let value = Value::Double(StataDouble::Missing(MissingValue::A));
+            assert_eq!(temporal_from_value(&value, "%tc"), None);
+        }
+
+        #[test]
+        fn missing_int_with_tm_returns_none() {
+            let value = Value::Int(StataInt::Missing(MissingValue::System));
+            assert_eq!(temporal_from_value(&value, "%tm"), None);
+        }
+
+        // -- mismatched value/format combinations ----------------------------
+
+        #[test]
+        fn double_with_td_returns_none() {
+            // %td expects an integer storage type; a Double is
+            // malformed and refused.
+            let value = Value::Double(StataDouble::Present(0.0));
+            assert_eq!(temporal_from_value(&value, "%td"), None);
+        }
+
+        #[test]
+        fn long_with_tc_returns_none() {
+            // %tc requires Double; a Long-stored %tc column is
+            // malformed.
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(temporal_from_value(&value, "%tc"), None);
+        }
+
+        #[test]
+        fn double_with_tm_returns_none() {
+            // Period formats use integer storage like %td.
+            let value = Value::Double(StataDouble::Present(0.0));
+            assert_eq!(temporal_from_value(&value, "%tm"), None);
         }
     }
 }
