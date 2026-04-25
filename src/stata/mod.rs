@@ -16,3 +16,5 @@ pub mod stata_int;
 pub mod stata_long;
 /// Timestamp from a DTA file header.
 pub mod stata_timestamp;
+/// Stata temporal (date/time) value interpretation.
+pub mod temporal;
