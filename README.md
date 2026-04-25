@@ -132,6 +132,57 @@ fn write_stata(path: &str) -> Result<()> {
 
 ## Feature Flags
 
+### `chrono` — date/time helpers
+
+Disabled by default. Stata stores dates and timestamps as plain numeric values whose meaning is encoded in the variable's display format (`%td`, `%tc`, `%tm`, …). Enabling `chrono` adds typed conversions to [chrono](https://docs.rs/chrono) types so you don't have to track the 1960 epoch, the milliseconds-vs-days distinction, or the legacy `%d` alias yourself.
+
+```toml
+[dependencies]
+dta = { version = "0.4", features = ["chrono"] }
+chrono = "0.4"
+```
+
+The module is layered. The lower layers ship without any time-crate dependency and are always available — only the typed adapters live behind the feature flag:
+
+- `dta::stata::temporal::conversion` — pure numeric helpers (`td_days_to_unix_days`, `tc_millis_to_unix_millis`, plus `(year, sub-period)` decomposers for `%tw`/`%tm`/`%tq`/`%th`). Useful as-is for consumers using `jiff`, `time`, or raw Unix timestamps.
+- `dta::stata::temporal::TemporalKind::from_format` — classify a Stata format string into `Date`, `DateTime`, `Year`, `Week`, etc. Recognizes the eight `%t*` prefixes plus the legacy `%d` alias, and ignores display suffixes (`%tdCCYY-NN-DD` classifies the same as bare `%td`).
+- `dta::stata::temporal::chrono_adapter` (feature-gated) — `NaiveDate` / `NaiveDateTime` adapters, `Value`-aware helpers that handle storage-type widening and Stata missing-value sentinels, and a `temporal_from_value(&Value, &str) -> Option<StataTemporal>` dispatcher that picks the right path from a column's format string.
+
+```rust
+use dta::stata::dta::dta_reader::DtaReader;
+use dta::stata::dta::dta_error::Result;
+use dta::stata::temporal::chrono_adapter::{StataTemporal, temporal_from_value};
+
+fn dump_temporal_columns(path: &str) -> Result<()> {
+    let mut reader = DtaReader::new()
+        .from_path(path)?
+        .read_header()?
+        .read_schema()?;
+    reader.skip_to_end()?;
+    let mut record_reader = reader.into_record_reader()?;
+    let schema = record_reader.schema().clone();
+
+    while let Some(record) = record_reader.read_record()? {
+        for (variable, value) in schema.variables().iter().zip(record.values()) {
+            match temporal_from_value(value, variable.format()) {
+                Some(StataTemporal::Date(d)) => println!("{}: {}", variable.name(), d),
+                Some(StataTemporal::DateTime(dt)) => println!("{}: {}", variable.name(), dt),
+                Some(StataTemporal::Year(y)) => println!("{}: {}", variable.name(), y),
+                Some(StataTemporal::YearMonth { year, month }) => {
+                    println!("{}: {}-{:02}", variable.name(), year, month);
+                }
+                Some(_) | None => {} // quarter / half / week / non-temporal
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+`temporal_from_value` returns `None` for non-temporal columns, Stata missing-value sentinels (`.` and `.a`–`.z`), storage/format mismatches (e.g., a `%tc` cell stored as `Long`), and the leap-second-adjusted `%tC` format (chrono can't model leap seconds; drop to the Layer 1 `tc_millis_to_unix_millis` helper if you need to make a policy decision yourself).
+
+The feature also enables `StataTimestamp::to_naive_date_time`, which converts the file-header timestamp directly to a `NaiveDateTime`.
+
 ### `tokio` — async I/O
 
 Disabled by default. Enable it for async reading and writing with [tokio](https://docs.rs/tokio).

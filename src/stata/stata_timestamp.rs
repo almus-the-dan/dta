@@ -96,6 +96,43 @@ impl StataTimestamp {
     }
 }
 
+#[cfg(feature = "chrono")]
+impl StataTimestamp {
+    /// Converts this timestamp to a [`chrono::NaiveDateTime`].
+    ///
+    /// Returns `None` when the parsed components don't form a valid
+    /// Gregorian date — for example, a `31 Feb` parsed without
+    /// calendar validation, or a `29 Feb` in a non-leap year. DTA
+    /// timestamps carry minute precision; the seconds field of the
+    /// returned value is always zero.
+    ///
+    /// Available only when the crate is built with the `chrono`
+    /// feature enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::NaiveDate;
+    /// use dta::stata::stata_timestamp::StataTimestamp;
+    ///
+    /// let timestamp = StataTimestamp::parse("01 Jan 2024 13:45").unwrap();
+    /// assert_eq!(
+    ///     timestamp.to_naive_date_time(),
+    ///     NaiveDate::from_ymd_opt(2024, 1, 1)
+    ///         .and_then(|d| d.and_hms_opt(13, 45, 0)),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn to_naive_date_time(&self) -> Option<chrono::NaiveDateTime> {
+        chrono::NaiveDate::from_ymd_opt(
+            i32::from(self.year),
+            u32::from(self.month),
+            u32::from(self.day),
+        )?
+        .and_hms_opt(u32::from(self.hour), u32::from(self.minute), 0)
+    }
+}
+
 /// Parses a three-letter month abbreviation (case-insensitive).
 ///
 /// Supports English and the localized variants that appear in
@@ -317,5 +354,50 @@ mod tests {
             StataTimestamp::parse("01 Jan 2024 13-45"),
             Err(StataError::InvalidTimestamp),
         );
+    }
+}
+
+#[cfg(all(test, feature = "chrono"))]
+mod chrono_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn typical_converts() {
+        let ts = StataTimestamp::parse("15 Mar 2023 09:30").unwrap();
+        assert_eq!(
+            ts.to_naive_date_time(),
+            NaiveDate::from_ymd_opt(2023, 3, 15).and_then(|d| d.and_hms_opt(9, 30, 0)),
+        );
+    }
+
+    #[test]
+    fn leap_day_in_leap_year_converts() {
+        let ts = StataTimestamp::parse("29 Feb 2024 12:00").unwrap();
+        assert_eq!(
+            ts.to_naive_date_time(),
+            NaiveDate::from_ymd_opt(2024, 2, 29).and_then(|d| d.and_hms_opt(12, 0, 0)),
+        );
+    }
+
+    #[test]
+    fn invalid_calendar_date_returns_none() {
+        // The parser accepts "31 Feb" because it doesn't
+        // cross-validate day-vs-month; chrono rejects it.
+        let ts = StataTimestamp::parse("31 Feb 2024 12:00").unwrap();
+        assert_eq!(ts.to_naive_date_time(), None);
+    }
+
+    #[test]
+    fn feb_29_in_non_leap_year_returns_none() {
+        let ts = StataTimestamp::parse("29 Feb 2023 12:00").unwrap();
+        assert_eq!(ts.to_naive_date_time(), None);
+    }
+
+    #[test]
+    fn seconds_are_always_zero() {
+        let ts = StataTimestamp::parse("01 Jan 2024 23:59").unwrap();
+        let dt = ts.to_naive_date_time().unwrap();
+        assert_eq!(dt.format("%S").to_string(), "00");
     }
 }

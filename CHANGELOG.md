@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- New `chrono` Cargo feature (off by default) bringing typed date/time conversions for Stata temporal values. The crate sits below pandas / haven / ReadStat in the stack, so the Stata-domain knowledge — 1960 epoch, milliseconds-vs-days, the case-sensitive `%tc`/`%tC` distinction, the legacy `%d` alias, and per-format storage-type expectations — is encoded once here instead of being reinvented by each downstream library.
+- New module `dta::stata::temporal`. Layered so the lower layers stay time-crate-agnostic and ship even without the feature flag:
+  - `temporal::TemporalKind::from_format(&str) -> Option<TemporalKind>` classifies a Stata format string into one of `Date` / `DateTime` / `DateTimeLeap` / `Week` / `Month` / `Quarter` / `HalfYear` / `Year`. Recognizes the eight `%t*` prefixes plus the legacy `%d` alias, and ignores display suffixes (`%tdCCYY-NN-DD` classifies the same as bare `%td`). Available without the `chrono` feature.
+  - `temporal::conversion` exposes `STATA_EPOCH_UNIX_DAYS`, `STATA_EPOCH_UNIX_MILLIS`, `td_days_to_unix_days`, `tc_millis_to_unix_millis`, and `(year, sub-period)` decomposers `tw_weeks_to_year_week` / `tm_months_to_year_month` / `tq_quarters_to_year_quarter` / `th_halves_to_year_half`. Available without the `chrono` feature.
+  - `temporal::chrono_adapter` (behind the `chrono` feature) wraps the conversion layer with `naive_date_from_td_days`, `naive_date_time_from_tc_millis`, `Value`-aware `naive_date_from_value` / `naive_date_time_from_value` (handling Stata missing-value sentinels and storage-type widening), and a `temporal_from_value(&Value, &str) -> Option<StataTemporal>` dispatcher. The `StataTemporal` enum is `#[non_exhaustive]` and unifies `Date(NaiveDate)`, `DateTime(NaiveDateTime)`, `Year(i32)`, and `(year, sub-period)` variants for the period formats.
+- `StataTimestamp::to_naive_date_time(&self) -> Option<chrono::NaiveDateTime>` (behind the `chrono` feature) for converting a parsed file-header timestamp directly to a chrono value. Returns `None` when the parsed components don't form a valid Gregorian date (e.g., `31 Feb`, `29 Feb 2023`).
+
+### Notes
+
+- `%tC` (capital C, leap-second-adjusted) is recognized by the format parser but the `chrono` adapter explicitly returns `None` for it. chrono does not model leap seconds, and silently treating `%tC` as `%tc` would produce timestamps that drift by seconds (and occasionally a minute) for values past the leap-second epoch. Consumers needing `%tC` can drop to `tc_millis_to_unix_millis` and apply their own policy.
+- The `Value`-aware helpers refuse storage/format mismatches (e.g., a `%td` cell stored as `Double`, or a `%tc` cell stored as `Long`) instead of coercing them, on the grounds that well-formed Stata files never produce these combinations and silent coercion would mask upstream-pipeline bugs. Drop to the Layer 1 helpers with a manually extracted scalar if you genuinely need to handle malformed data.
+
 ## [0.3.0] - 2026-04-24
 
 ### Added
