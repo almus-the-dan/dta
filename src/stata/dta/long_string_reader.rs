@@ -327,13 +327,19 @@ impl<R: BufRead + Seek> LongStringReader<R> {
     /// Returns [`DtaError::Io`] if the section offsets have not been
     /// initialized or if the seek fails.
     pub fn seek_long_strings(mut self) -> Result<Self> {
-        let long_strings_offset = self
+        let offsets = self
             .state
             .section_offsets()
-            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?
-            .long_strings();
-        if let Some(offset) = long_strings_offset {
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?;
+        if let Some(offset) = offsets.long_strings() {
             self.state.seek_to(offset, Section::LongStrings)?;
+        } else {
+            // Pre-117 has no strL section. Park the reader at the
+            // start of value-labels so the immediately-completed
+            // LongStringReader transitions cleanly via
+            // `into_value_label_reader`.
+            let offset = offsets.value_labels();
+            self.state.seek_to(offset, Section::ValueLabels)?;
         }
         let reader = Self::new(self.state, self.header, self.schema);
         Ok(reader)
@@ -350,8 +356,12 @@ mod tests {
     use crate::stata::dta::dta_writer::DtaWriter;
     use crate::stata::dta::long_string_ref::LongStringRef;
     use crate::stata::dta::release::Release;
+    use crate::stata::dta::value::Value;
+    use crate::stata::dta::value_label::{ValueLabelEntry, ValueLabelSet};
+    use crate::stata::dta::value_label_table::ValueLabelTable;
     use crate::stata::dta::variable::Variable;
     use crate::stata::dta::variable_type::VariableType;
+    use crate::stata::stata_byte::StataByte;
 
     fn text(variable: u32, observation: u64, data: &'static str) -> LongString<'static> {
         LongString::new(
@@ -487,6 +497,117 @@ mod tests {
         reader.read_remaining_into(&mut table).unwrap();
         // Drained reader must be able to transition to the next phase.
         let _value_label_reader = reader.into_value_label_reader().unwrap();
+    }
+
+    /// Builds a V114 (pre-117 binary) file with a non-empty data
+    /// section and one value-label set. V114 has no strL section, so
+    /// the seek-to-long-strings path has to land at value-labels for
+    /// the chained `into_value_label_reader` to work; the data
+    /// section is non-empty so the start of records and the start of
+    /// value-labels are at different offsets — masking the bug if
+    /// the records section happened to be zero-length.
+    fn build_v114_file_with_value_label_set(name: &str, value: i32, label: &str) -> Vec<u8> {
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::Byte, "x").format("%8.0g"))
+            .build()
+            .unwrap();
+        let header = Header::builder(Release::V114, ByteOrder::LittleEndian).build();
+        let set = ValueLabelSet::new(
+            name.to_owned(),
+            vec![ValueLabelEntry::new(value, label.to_owned())],
+        );
+        let mut record_writer = DtaWriter::new()
+            .from_writer(Cursor::new(Vec::<u8>::new()))
+            .write_header(header)
+            .unwrap()
+            .write_schema(schema)
+            .unwrap()
+            .into_record_writer()
+            .unwrap();
+        for byte in 0i8..3 {
+            record_writer
+                .write_record(&[Value::Byte(StataByte::Present(byte))])
+                .unwrap();
+        }
+        let mut value_label_writer = record_writer
+            .into_long_string_writer()
+            .unwrap()
+            .into_value_label_writer()
+            .unwrap();
+        value_label_writer.write_value_label_set(&set).unwrap();
+        value_label_writer.finish().unwrap().into_inner()
+    }
+
+    fn assert_color_red(table: &ValueLabelTable) {
+        assert_eq!(table.get("color").unwrap().label_for(1), Some("red"));
+    }
+
+    #[test]
+    fn pre_117_seek_long_strings_from_characteristic_reader_chains_to_value_labels() {
+        let bytes = build_v114_file_with_value_label_set("color", 1, "red");
+        let mut characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        characteristic_reader.skip_to_end().unwrap();
+
+        let long_string_reader = characteristic_reader.seek_long_strings().unwrap();
+        let mut value_label_reader = long_string_reader.into_value_label_reader().unwrap();
+        let mut table = ValueLabelTable::new();
+        value_label_reader.read_remaining_into(&mut table).unwrap();
+        assert_color_red(&table);
+    }
+
+    #[test]
+    fn pre_117_seek_long_strings_from_record_reader_chains_to_value_labels() {
+        let bytes = build_v114_file_with_value_label_set("color", 1, "red");
+        let mut characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        characteristic_reader.skip_to_end().unwrap();
+        let record_reader = characteristic_reader.into_record_reader().unwrap();
+
+        let long_string_reader = record_reader.seek_long_strings().unwrap();
+        let mut value_label_reader = long_string_reader.into_value_label_reader().unwrap();
+        let mut table = ValueLabelTable::new();
+        value_label_reader.read_remaining_into(&mut table).unwrap();
+        assert_color_red(&table);
+    }
+
+    #[test]
+    fn pre_117_seek_long_strings_from_long_string_reader_chains_to_value_labels() {
+        let bytes = build_v114_file_with_value_label_set("color", 1, "red");
+        let long_string_reader = long_string_reader_for(bytes);
+
+        let long_string_reader = long_string_reader.seek_long_strings().unwrap();
+        let mut value_label_reader = long_string_reader.into_value_label_reader().unwrap();
+        let mut table = ValueLabelTable::new();
+        value_label_reader.read_remaining_into(&mut table).unwrap();
+        assert_color_red(&table);
+    }
+
+    #[test]
+    fn pre_117_seek_long_strings_from_value_label_reader_chains_to_value_labels() {
+        let bytes = build_v114_file_with_value_label_set("color", 1, "red");
+        let mut characteristic_reader = DtaReader::new()
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+            .unwrap()
+            .read_schema()
+            .unwrap();
+        characteristic_reader.skip_to_end().unwrap();
+        let value_label_reader = characteristic_reader.seek_value_labels().unwrap();
+
+        let long_string_reader = value_label_reader.seek_long_strings().unwrap();
+        let mut value_label_reader = long_string_reader.into_value_label_reader().unwrap();
+        let mut table = ValueLabelTable::new();
+        value_label_reader.read_remaining_into(&mut table).unwrap();
+        assert_color_red(&table);
     }
 
     #[test]

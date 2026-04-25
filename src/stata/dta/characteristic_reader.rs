@@ -471,13 +471,19 @@ impl<R: BufRead + Seek> CharacteristicReader<R> {
     /// initialized or if the seek fails.
     pub fn seek_long_strings(mut self) -> Result<LongStringReader<R>> {
         self.ensure_post_characteristics_offsets()?;
-        let long_strings_offset = self
+        let offsets = self
             .state
             .section_offsets()
-            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?
-            .long_strings();
-        if let Some(offset) = long_strings_offset {
+            .ok_or_else(|| DtaError::missing_section_offsets(Section::LongStrings))?;
+        if let Some(offset) = offsets.long_strings() {
             self.state.seek_to(offset, Section::LongStrings)?;
+        } else {
+            // Pre-117 has no strL section. Park the reader at the
+            // start of value-labels so the immediately completed
+            // LongStringReader transitions cleanly via
+            // `into_value_label_reader`.
+            let offset = offsets.value_labels();
+            self.state.seek_to(offset, Section::ValueLabels)?;
         }
         let reader = LongStringReader::new(self.state, self.header, self.schema);
         Ok(reader)

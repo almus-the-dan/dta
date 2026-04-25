@@ -6,8 +6,9 @@ use super::header::Header;
 use super::long_string_ref::LongStringRef;
 use super::long_string_writer::LongStringWriter;
 use super::record_format::{
-    encode_numeric, encode_record_string, encode_u48, narrow_variable_index,
-    observation_count_overflow_error, validate_record_arity, validate_record_value_types,
+    encode_numeric, encode_record_string, encode_u24, encode_u40, encode_u48,
+    narrow_variable_index, observation_count_overflow_error, validate_record_arity,
+    validate_record_value_types,
 };
 use super::release::Release;
 use super::schema::Schema;
@@ -321,8 +322,9 @@ impl<W: Write> RecordWriter<W> {
 
     /// Emits an 8-byte strL reference. Layout depends on release:
     ///
-    /// - V117: `v` as `u32` (4 bytes) + `o` as `u32` (4 bytes).
-    /// - V118+: `v` as `u16` (2 bytes) + `o` as `u48` (6 bytes).
+    /// - V117:  `v` as `u32` (4 bytes) + `o` as `u32` (4 bytes).
+    /// - V118:  `v` as `u16` (2 bytes) + `o` as `u48` (6 bytes).
+    /// - V119+: `v` as `u24` (3 bytes) + `o` as `u40` (5 bytes).
     ///
     /// Narrows `variable` / `observation` to the on-disk width,
     /// returning `FieldTooLarge` on overflow.
@@ -334,8 +336,12 @@ impl<W: Write> RecordWriter<W> {
     ) -> Result<()> {
         let variable = long_string_ref.variable();
         let observation = long_string_ref.observation();
-        if release.supports_extended_observation_count() {
-            // V118+: u16 variable + u48 observation.
+        if release.supports_extended_variable_count() {
+            // V119+: u24 variable + u40 observation.
+            self.write_u24(variable, byte_order)?;
+            self.write_u40(observation, byte_order)?;
+        } else if release.supports_extended_observation_count() {
+            // V118: u16 variable + u48 observation.
             let narrowed_variable = self.state.narrow_to_u16(
                 u64::from(variable),
                 Section::Records,
@@ -361,6 +367,20 @@ impl<W: Write> RecordWriter<W> {
     /// order. Errors if `value >= 2^48`.
     fn write_u48(&mut self, value: u64, byte_order: ByteOrder) -> Result<()> {
         let bytes = encode_u48(value, byte_order, self.state.position())?;
+        self.state.write_exact(&bytes, Section::Records)
+    }
+
+    /// Writes `value` as a 24-bit unsigned integer in the given byte
+    /// order. Errors if `value >= 2^24`.
+    fn write_u24(&mut self, value: u32, byte_order: ByteOrder) -> Result<()> {
+        let bytes = encode_u24(value, byte_order, self.state.position())?;
+        self.state.write_exact(&bytes, Section::Records)
+    }
+
+    /// Writes `value` as a 40-bit unsigned integer in the given byte
+    /// order. Errors if `value >= 2^40`.
+    fn write_u40(&mut self, value: u64, byte_order: ByteOrder) -> Result<()> {
+        let bytes = encode_u40(value, byte_order, self.state.position())?;
         self.state.write_exact(&bytes, Section::Records)
     }
 }
@@ -692,6 +712,27 @@ mod tests {
     }
 
     #[test]
+    fn xml_v117_long_string_ref_big_endian_round_trip() {
+        // V117 uses u32 variable + u32 observation in the data
+        // section; verify the BE byte order also round-trips.
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::LongString, "note").format("%9s"))
+            .build()
+            .unwrap();
+        let mut table = LongStringTable::for_writing();
+        let reference =
+            table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"payload")));
+
+        let bytes = round_trip(Release::V117, ByteOrder::BigEndian, schema, |writer| {
+            writer
+                .write_record(&[Value::LongStringRef(reference)])
+                .unwrap();
+        });
+        let records = read_back(bytes);
+        assert_eq!(records[0][0], OwnedValue::LongStringRef(reference));
+    }
+
+    #[test]
     fn xml_v118_long_string_ref_round_trip() {
         // V118 uses u16 variable + u48 observation in the data
         // section — exercises the different on-disk layout.
@@ -723,6 +764,72 @@ mod tests {
             table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"payload")));
 
         let bytes = round_trip(Release::V118, ByteOrder::BigEndian, schema, |writer| {
+            writer
+                .write_record(&[Value::LongStringRef(reference)])
+                .unwrap();
+        });
+        let records = read_back(bytes);
+        assert_eq!(records[0][0], OwnedValue::LongStringRef(reference));
+    }
+
+    #[test]
+    fn xml_v119_long_string_ref_round_trip() {
+        // V119 uses u24 variable + u40 observation in the data
+        // section — narrower variable than V117 (u32) and narrower
+        // observation than V118 (u48).
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::LongString, "note").format("%9s"))
+            .build()
+            .unwrap();
+        let mut table = LongStringTable::for_writing();
+        let reference =
+            table.get_or_insert(7, 42, LongStringContent::Text(Cow::Borrowed(b"hello")));
+
+        let bytes = round_trip(Release::V119, ByteOrder::LittleEndian, schema, |writer| {
+            writer
+                .write_record(&[Value::LongStringRef(reference)])
+                .unwrap();
+        });
+        let records = read_back(bytes);
+        assert_eq!(records[0][0], OwnedValue::LongStringRef(reference));
+    }
+
+    #[test]
+    fn xml_v119_long_string_ref_big_endian_round_trip() {
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::LongString, "note").format("%9s"))
+            .build()
+            .unwrap();
+        let mut table = LongStringTable::for_writing();
+        let reference =
+            table.get_or_insert(3, 5, LongStringContent::Text(Cow::Borrowed(b"payload")));
+
+        let bytes = round_trip(Release::V119, ByteOrder::BigEndian, schema, |writer| {
+            writer
+                .write_record(&[Value::LongStringRef(reference)])
+                .unwrap();
+        });
+        let records = read_back(bytes);
+        assert_eq!(records[0][0], OwnedValue::LongStringRef(reference));
+    }
+
+    #[test]
+    fn xml_v119_long_string_ref_wide_observation_round_trip() {
+        // V119 supports observations up to 2^40 - 1; verify a value
+        // above the V118 u48 zero region but inside u40 round-trips.
+        let schema = Schema::builder()
+            .add_variable(Variable::builder(VariableType::LongString, "note").format("%9s"))
+            .build()
+            .unwrap();
+        let mut table = LongStringTable::for_writing();
+        let wide_observation: u64 = 5_000_000_000;
+        let reference = table.get_or_insert(
+            1,
+            wide_observation,
+            LongStringContent::Text(Cow::Borrowed(b"wide")),
+        );
+
+        let bytes = round_trip(Release::V119, ByteOrder::LittleEndian, schema, |writer| {
             writer
                 .write_record(&[Value::LongStringRef(reference)])
                 .unwrap();

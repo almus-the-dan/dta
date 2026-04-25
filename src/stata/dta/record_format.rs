@@ -142,7 +142,7 @@ pub(super) fn observation_count_overflow_error(position: u64) -> DtaError {
 }
 
 /// Encodes the 6 bytes of a `u48` value in the given byte order for
-/// emission into the data section (V118+ `strL` observation field).
+/// emission into the data section (V118 `strL` observation field).
 /// Errors with [`FormatErrorKind::FieldTooLarge`] if `value >= 2^48`.
 ///
 /// For big-endian the 6 data-carrying bytes are the upper ones of the
@@ -168,6 +168,68 @@ pub(super) fn encode_u48(value: u64, byte_order: ByteOrder, position: u64) -> Re
         ByteOrder::LittleEndian => &bytes8[0..6],
     };
     let mut bytes = [0u8; 6];
+    bytes.copy_from_slice(slice);
+    Ok(bytes)
+}
+
+/// Encodes the 3 bytes of a `u24` value in the given byte order for
+/// emission into the data section (V119+ `strL` variable field).
+/// Errors with [`FormatErrorKind::FieldTooLarge`] if `value >= 2^24`.
+///
+/// For big-endian the 3 data-carrying bytes are the upper ones of the
+/// equivalent `u32` layout (`bytes4[1..4]`); for little-endian they
+/// are the lower ones (`bytes4[0..3]`).
+pub(super) fn encode_u24(value: u32, byte_order: ByteOrder, position: u64) -> Result<[u8; 3]> {
+    const MAX_U24: u32 = (1u32 << 24) - 1;
+    if value > MAX_U24 {
+        let error = DtaError::format(
+            Section::Records,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::VariableCount,
+                max: u64::from(MAX_U24),
+                actual: u64::from(value),
+            },
+        );
+        return Err(error);
+    }
+    let bytes4 = byte_order.write_u32(value);
+    let slice = match byte_order {
+        ByteOrder::BigEndian => &bytes4[1..4],
+        ByteOrder::LittleEndian => &bytes4[0..3],
+    };
+    let mut bytes = [0u8; 3];
+    bytes.copy_from_slice(slice);
+    Ok(bytes)
+}
+
+/// Encodes the 5 bytes of a `u40` value in the given byte order for
+/// emission into the data section (V119+ `strL` observation field).
+/// Errors with [`FormatErrorKind::FieldTooLarge`] if `value >= 2^40`.
+///
+/// For big-endian the 5 data-carrying bytes are the upper ones of the
+/// equivalent `u64` layout (`bytes8[3..8]`); for little-endian they
+/// are the lower ones (`bytes8[0..5]`).
+pub(super) fn encode_u40(value: u64, byte_order: ByteOrder, position: u64) -> Result<[u8; 5]> {
+    const MAX_U40: u64 = (1u64 << 40) - 1;
+    if value > MAX_U40 {
+        let error = DtaError::format(
+            Section::Records,
+            position,
+            FormatErrorKind::FieldTooLarge {
+                field: Field::ObservationCount,
+                max: MAX_U40,
+                actual: value,
+            },
+        );
+        return Err(error);
+    }
+    let bytes8 = byte_order.write_u64(value);
+    let slice = match byte_order {
+        ByteOrder::BigEndian => &bytes8[3..8],
+        ByteOrder::LittleEndian => &bytes8[0..5],
+    };
+    let mut bytes = [0u8; 5];
     bytes.copy_from_slice(slice);
     Ok(bytes)
 }

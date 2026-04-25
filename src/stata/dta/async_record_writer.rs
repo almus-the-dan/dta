@@ -7,8 +7,9 @@ use super::dta_error::{Field, Result, Section};
 use super::header::Header;
 use super::long_string_ref::LongStringRef;
 use super::record_format::{
-    encode_numeric, encode_record_string, encode_u48, narrow_variable_index,
-    observation_count_overflow_error, validate_record_arity, validate_record_value_types,
+    encode_numeric, encode_record_string, encode_u24, encode_u40, encode_u48,
+    narrow_variable_index, observation_count_overflow_error, validate_record_arity,
+    validate_record_value_types,
 };
 use super::release::Release;
 use super::schema::Schema;
@@ -312,8 +313,9 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
 
     /// Emits an 8-byte strL reference. Layout depends on release:
     ///
-    /// - V117: `v` as `u32` (4 bytes) + `o` as `u32` (4 bytes).
-    /// - V118+: `v` as `u16` (2 bytes) + `o` as `u48` (6 bytes).
+    /// - V117:  `v` as `u32` (4 bytes) + `o` as `u32` (4 bytes).
+    /// - V118:  `v` as `u16` (2 bytes) + `o` as `u48` (6 bytes).
+    /// - V119+: `v` as `u24` (3 bytes) + `o` as `u40` (5 bytes).
     async fn write_long_string_ref(
         &mut self,
         long_string_ref: LongStringRef,
@@ -322,7 +324,18 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
     ) -> Result<()> {
         let variable = long_string_ref.variable();
         let observation = long_string_ref.observation();
-        if release.supports_extended_observation_count() {
+        if release.supports_extended_variable_count() {
+            // V119+: u24 variable + u40 observation.
+            let variable_bytes = encode_u24(variable, byte_order, self.state.position())?;
+            self.state
+                .write_exact(&variable_bytes, Section::Records)
+                .await?;
+            let observation_bytes = encode_u40(observation, byte_order, self.state.position())?;
+            self.state
+                .write_exact(&observation_bytes, Section::Records)
+                .await?;
+        } else if release.supports_extended_observation_count() {
+            // V118: u16 variable + u48 observation.
             let narrowed_variable = self.state.narrow_to_u16(
                 u64::from(variable),
                 Section::Records,
@@ -334,6 +347,7 @@ impl<W: AsyncWrite + Unpin> AsyncRecordWriter<W> {
             let bytes = encode_u48(observation, byte_order, self.state.position())?;
             self.state.write_exact(&bytes, Section::Records).await?;
         } else {
+            // V117: u32 variable + u32 observation.
             self.state
                 .write_u32(variable, byte_order, Section::Records)
                 .await?;
