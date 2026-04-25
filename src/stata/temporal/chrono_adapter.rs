@@ -13,6 +13,7 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeDelta};
 
 use super::conversion::{tc_millis_to_unix_millis, td_days_to_unix_days};
+use crate::stata::dta::value::Value;
 
 /// Converts a `%td` Stata day count (days since 1960-01-01) into a
 /// [`NaiveDate`].
@@ -64,6 +65,76 @@ pub fn naive_date_from_td_days(stata_days: i32) -> Option<NaiveDate> {
 pub fn naive_date_time_from_tc_millis(stata_millis: f64) -> Option<NaiveDateTime> {
     let unix_millis = tc_millis_to_unix_millis(stata_millis)?;
     DateTime::from_timestamp_millis(unix_millis).map(|dt| dt.naive_utc())
+}
+
+/// Converts a Stata [`Value`] into a [`NaiveDate`], treating it as a
+/// `%td` (days since 1960-01-01) reading.
+///
+/// Accepted variants — widened losslessly to `i32`:
+///
+/// | Variant         | Behavior                              |
+/// |-----------------|---------------------------------------|
+/// | [`Value::Byte`] | Present `i8` → `i32`; missing → `None` |
+/// | [`Value::Int`]  | Present `i16` → `i32`; missing → `None` |
+/// | [`Value::Long`] | Present `i32` directly; missing → `None` |
+///
+/// All other variants — including [`Value::Float`] / [`Value::Double`]
+/// — return `None`. Well-formed Stata files store `%td` columns as
+/// integer types only; a date stored as a float is either an
+/// upgrade-path artifact or malformed data, and silently coercing
+/// it would mask bugs in the upstream pipeline. Drop to
+/// [`naive_date_from_td_days`] with a manually extracted integer
+/// if you need to handle such files.
+///
+/// Missing-value sentinels (`.` and the tagged `.a`–`.z` from
+/// format 113+) all map to `None`. The dispatcher in
+/// [`temporal_from_value`](super) preserves the same convention.
+#[must_use]
+pub fn naive_date_from_value(value: &Value<'_>) -> Option<NaiveDate> {
+    let stata_days = match value {
+        Value::Byte(byte_value) => i32::from(byte_value.present()?),
+        Value::Int(int_value) => i32::from(int_value.present()?),
+        Value::Long(long_value) => long_value.present()?,
+        Value::Float(_) | Value::Double(_) | Value::String(_) | Value::LongStringRef(_) => {
+            return None;
+        }
+    };
+    naive_date_from_td_days(stata_days)
+}
+
+/// Converts a Stata [`Value`] into a [`NaiveDateTime`], treating it
+/// as a `%tc` (milliseconds since 1960-01-01T00:00:00) reading.
+///
+/// Accepted variants:
+///
+/// | Variant           | Behavior                                  |
+/// |-------------------|-------------------------------------------|
+/// | [`Value::Double`] | Present `f64` directly; missing → `None`  |
+/// | [`Value::Float`]  | Present `f32` widened to `f64`; missing → `None` |
+///
+/// All other variants return `None`. `%tc` values exceed `i32`
+/// range past ~25 days from the Stata epoch, so well-formed Stata
+/// files always use a floating-point storage type for `%tc`
+/// columns. The integer variants are rejected to surface
+/// upstream-pipeline bugs rather than coerce a 24-day-range value
+/// silently.
+///
+/// Missing-value sentinels (`.` and the tagged `.a`–`.z` from
+/// format 113+) map to `None`. Float widening to `f64` is
+/// lossless. See [`naive_date_time_from_tc_millis`] for the
+/// underlying conversion semantics, including non-finite handling.
+#[must_use]
+pub fn naive_date_time_from_value(value: &Value<'_>) -> Option<NaiveDateTime> {
+    let stata_millis = match value {
+        Value::Double(double_value) => double_value.present()?,
+        Value::Float(float_value) => f64::from(float_value.present()?),
+        Value::Byte(_)
+        | Value::Int(_)
+        | Value::Long(_)
+        | Value::String(_)
+        | Value::LongStringRef(_) => return None,
+    };
+    naive_date_time_from_tc_millis(stata_millis)
 }
 
 #[cfg(test)]
@@ -218,5 +289,227 @@ mod tests {
         // the chrono constructor.
         let beyond_chrono = 1.0e16_f64; // ~317000 years post-Stata-epoch
         assert_eq!(naive_date_time_from_tc_millis(beyond_chrono), None);
+    }
+
+    // -- naive_date_from_value -----------------------------------------------
+
+    mod date_from_value {
+        use super::super::*;
+        use crate::stata::dta::long_string_ref::LongStringRef;
+        use crate::stata::missing_value::MissingValue;
+        use crate::stata::stata_byte::StataByte;
+        use crate::stata::stata_double::StataDouble;
+        use crate::stata::stata_float::StataFloat;
+        use crate::stata::stata_int::StataInt;
+        use crate::stata::stata_long::StataLong;
+
+        fn epoch() -> NaiveDate {
+            NaiveDate::from_ymd_opt(1960, 1, 1).unwrap()
+        }
+
+        #[test]
+        fn long_present_zero_is_epoch() {
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(naive_date_from_value(&value), Some(epoch()));
+        }
+
+        #[test]
+        fn long_present_nonzero() {
+            let value = Value::Long(StataLong::Present(366));
+            assert_eq!(
+                naive_date_from_value(&value),
+                Some(NaiveDate::from_ymd_opt(1961, 1, 1).unwrap()),
+            );
+        }
+
+        #[test]
+        fn long_present_negative_pre_epoch() {
+            let value = Value::Long(StataLong::Present(-1));
+            assert_eq!(
+                naive_date_from_value(&value),
+                Some(NaiveDate::from_ymd_opt(1959, 12, 31).unwrap()),
+            );
+        }
+
+        #[test]
+        fn int_present_widens_to_i32() {
+            let value = Value::Int(StataInt::Present(366));
+            assert_eq!(
+                naive_date_from_value(&value),
+                Some(NaiveDate::from_ymd_opt(1961, 1, 1).unwrap()),
+            );
+        }
+
+        #[test]
+        fn byte_present_widens_to_i32() {
+            let value = Value::Byte(StataByte::Present(31));
+            assert_eq!(
+                naive_date_from_value(&value),
+                Some(NaiveDate::from_ymd_opt(1960, 2, 1).unwrap()),
+            );
+        }
+
+        #[test]
+        fn long_missing_system_is_none() {
+            let value = Value::Long(StataLong::Missing(MissingValue::System));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn long_missing_tagged_is_none() {
+            let value = Value::Long(StataLong::Missing(MissingValue::A));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn int_missing_is_none() {
+            let value = Value::Int(StataInt::Missing(MissingValue::System));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn byte_missing_is_none() {
+            let value = Value::Byte(StataByte::Missing(MissingValue::System));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn float_present_is_none() {
+            // Well-formed Stata files don't store %td as Float; we
+            // refuse rather than coerce.
+            let value = Value::Float(StataFloat::Present(0.0));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn double_present_is_none() {
+            let value = Value::Double(StataDouble::Present(0.0));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn string_is_none() {
+            let value = Value::string("not a date");
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn long_string_ref_is_none() {
+            let value = Value::LongStringRef(LongStringRef::new(1, 1));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+
+        #[test]
+        fn long_present_extreme_returns_none_via_chrono_range() {
+            let value = Value::Long(StataLong::Present(i32::MAX));
+            assert_eq!(naive_date_from_value(&value), None);
+        }
+    }
+
+    // -- naive_date_time_from_value ------------------------------------------
+
+    mod date_time_from_value {
+        use super::super::*;
+        use crate::stata::dta::long_string_ref::LongStringRef;
+        use crate::stata::missing_value::MissingValue;
+        use crate::stata::stata_byte::StataByte;
+        use crate::stata::stata_double::StataDouble;
+        use crate::stata::stata_float::StataFloat;
+        use crate::stata::stata_int::StataInt;
+        use crate::stata::stata_long::StataLong;
+
+        fn epoch_midnight() -> NaiveDateTime {
+            NaiveDate::from_ymd_opt(1960, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+        }
+
+        #[test]
+        fn double_present_zero_is_epoch_midnight() {
+            let value = Value::Double(StataDouble::Present(0.0));
+            assert_eq!(naive_date_time_from_value(&value), Some(epoch_midnight()));
+        }
+
+        #[test]
+        fn double_present_one_second() {
+            let value = Value::Double(StataDouble::Present(1000.0));
+            let expected = NaiveDate::from_ymd_opt(1960, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 1)
+                .unwrap();
+            assert_eq!(naive_date_time_from_value(&value), Some(expected));
+        }
+
+        #[test]
+        fn float_present_widens_losslessly() {
+            // Float can exactly represent 0.0 and 1000.0 — pick
+            // values within Float's integer-precision range
+            // (~2^24 = 16777216) so the widening is exact.
+            let value = Value::Float(StataFloat::Present(1000.0));
+            let expected = NaiveDate::from_ymd_opt(1960, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 1)
+                .unwrap();
+            assert_eq!(naive_date_time_from_value(&value), Some(expected));
+        }
+
+        #[test]
+        fn double_missing_system_is_none() {
+            let value = Value::Double(StataDouble::Missing(MissingValue::System));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn double_missing_tagged_is_none() {
+            let value = Value::Double(StataDouble::Missing(MissingValue::Z));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn float_missing_is_none() {
+            let value = Value::Float(StataFloat::Missing(MissingValue::System));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn double_nan_present_is_none() {
+            // NaN here is a *present* f64 value (not a missing
+            // sentinel) — the Layer 1 finite-check rejects it.
+            let value = Value::Double(StataDouble::Present(f64::NAN));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn long_present_is_none() {
+            // Integer storage for %tc is malformed (range is ~24
+            // days). Refuse rather than coerce.
+            let value = Value::Long(StataLong::Present(0));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn int_present_is_none() {
+            let value = Value::Int(StataInt::Present(0));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn byte_present_is_none() {
+            let value = Value::Byte(StataByte::Present(0));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn string_is_none() {
+            let value = Value::string("not a datetime");
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
+
+        #[test]
+        fn long_string_ref_is_none() {
+            let value = Value::LongStringRef(LongStringRef::new(1, 1));
+            assert_eq!(naive_date_time_from_value(&value), None);
+        }
     }
 }
