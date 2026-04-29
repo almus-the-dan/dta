@@ -2,9 +2,9 @@
 
 A pure Rust library for reading and writing Stata's DTA file format.
 
-DTA is the binary format used by [Stata](https://www.stata.com/) to persist datasets. It's still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open. This library provides a streaming reader and writer covering every released version of the format (104 through 119), including XML-framed releases (117+), tagged missing values, value-label sets, and long-string (`strL`) storage.
+DTA is the binary format used by [Stata](https://www.stata.com/) to persist datasets. It's still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open. This library provides a streaming reader and writer covering every released version of the format (102 through 119), including XML-framed releases (117+), tagged missing values, value-label sets, and long-string (`strL`) storage.
 
-The API is built around a typestate chain, so you can't accidentally write a schema before a header, or read data bytes before the schema has been parsed. Each phase borrows the underlying I/O handle and hands it to the next phase, keeping the whole pipeline zero-copy where possible.
+The API is built around a typestate chain, so you can't accidentally write a schema before a header, or read data records before the schema has been parsed. Each phase borrows the underlying I/O handle and hands it to the next phase, keeping the whole pipeline zero-copy where possible.
 
 ## Usage
 
