@@ -1,3 +1,5 @@
+/// DCT (Stata dictionary) file format reader.
+pub mod dct;
 /// DTA file format reader.
 pub mod dta;
 /// Stata missing value representation.
