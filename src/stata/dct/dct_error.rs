@@ -8,6 +8,15 @@ pub enum DctError {
     Io(std::io::Error),
     /// The dictionary file ended before its closing `}` was reached.
     UnexpectedEofInDictionary,
+    /// The `dictionary [using FILE] {` opening could not be parsed —
+    /// the keyword `dictionary` was missing or the surrounding tokens
+    /// were malformed.
+    InvalidDictionaryHeader {
+        /// 1-based line number where the header was being parsed.
+        line: usize,
+        /// Accumulated tokens that could not be interpreted.
+        content: String,
+    },
     /// A `_column(#)` directive could not be parsed.
     InvalidColumnDirective {
         /// 1-based line number within the dictionary file.
@@ -22,13 +31,13 @@ pub enum DctError {
         /// The unrecognized read-format token.
         format: String,
     },
-    /// A storage-type token was not one of the known Stata types
-    /// (`byte`, `int`, `long`, `float`, `double`, `str`, `str#`).
-    UnknownStorageType {
+    /// A directive that may appear at most once was encountered a
+    /// second time (e.g. two `lrecl(#)` declarations).
+    DuplicateDirective {
         /// 1-based line number within the dictionary file.
         line: usize,
-        /// The unrecognized token.
-        token: String,
+        /// The directive name.
+        directive: String,
     },
     /// A data record exceeded the maximum permitted length
     /// (524,275 bytes).
@@ -56,12 +65,6 @@ pub enum DctError {
     },
 }
 
-impl DctError {
-    pub(crate) fn io(source: std::io::Error) -> Self {
-        Self::Io(source)
-    }
-}
-
 impl fmt::Display for DctError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -69,15 +72,19 @@ impl fmt::Display for DctError {
             Self::UnexpectedEofInDictionary => {
                 f.write_str("dictionary ended before its closing '}'")
             }
+            Self::InvalidDictionaryHeader { line, content } => {
+                write!(f, "invalid dictionary header on line {line}: {content}")
+            }
             Self::InvalidColumnDirective { line, content } => {
-                write!(f, "invalid _column(#) directive on line {line}: {content}",)
+                write!(f, "invalid _column(#) directive on line {line}: {content}")
             }
             Self::InvalidReadFormat { line, format } => {
                 write!(f, "invalid read format '{format}' on line {line}")
             }
-            Self::UnknownStorageType { line, token } => {
-                write!(f, "unknown storage type '{token}' on line {line}")
-            }
+            Self::DuplicateDirective { line, directive } => write!(
+                f,
+                "directive '{directive}' on line {line} appeared more than once",
+            ),
             Self::RecordTooLong { line, length } => write!(
                 f,
                 "data record on line {line} is {length} bytes, exceeds the 524275-byte limit",

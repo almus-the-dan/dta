@@ -4,6 +4,7 @@ use super::variable_type::VariableType;
 /// A single variable as declared in a `.dct` dictionary.
 #[derive(Debug, Clone)]
 pub struct Column {
+    line_offset: usize,
     offset: usize,
     storage_type: VariableType,
     name: String,
@@ -15,6 +16,7 @@ impl Column {
     /// Builds a new column declaration.
     #[must_use]
     pub(crate) fn new(
+        line_offset: usize,
         offset: usize,
         storage_type: VariableType,
         name: String,
@@ -22,6 +24,7 @@ impl Column {
         label: Option<String>,
     ) -> Self {
         Self {
+            line_offset,
             offset,
             storage_type,
             name,
@@ -30,8 +33,29 @@ impl Column {
         }
     }
 
-    /// 1-based byte offset within each data record, set by the
-    /// `_column(#)` directive.
+    /// 0-based index of the physical line within an observation that
+    /// this column lives on.
+    ///
+    /// Single-line observations always report `0`. Multi-line
+    /// observations are produced by `_newline` directives in the
+    /// dictionary: the first variable sits on line `0`, each
+    /// subsequent `_newline` advances the line index by one for the
+    /// variables that follow.
+    #[must_use]
+    #[inline]
+    pub fn line_offset(&self) -> usize {
+        self.line_offset
+    }
+
+    /// 0-based byte offset within this column's physical line at
+    /// which the variable's field begins.
+    ///
+    /// Derived from the `_column(#)` directive in the dictionary,
+    /// which is 1-based; the parser subtracts one and validates that
+    /// the declared value was at least 1. After a `_newline` the
+    /// `_column(#)` reference restarts from 1, so this offset is
+    /// relative to [`line_offset`](Self::line_offset), not cumulative
+    /// across the observation.
     #[must_use]
     #[inline]
     pub fn offset(&self) -> usize {

@@ -10,6 +10,14 @@
 //! carry `strL` references, so the DCT-domain
 //! [`Value`] / [`VariableType`] types deliberately diverge from
 //! their DTA counterparts.
+//!
+//! # Line endings
+//!
+//! Both Unix `\n` and Windows `\r\n` line endings are accepted in
+//! both the dictionary file and its associated data file. Classic
+//! Mac `\r`-only line endings are not — Stata never emitted them and
+//! supporting them would require a different reading strategy. A
+//! `\r`-delimited file would be read as a single very long line.
 
 /// Per-variable column declaration parsed from the dictionary.
 pub mod column;

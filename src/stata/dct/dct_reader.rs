@@ -44,6 +44,16 @@ impl<R: BufRead> DctReader<R> {
         &self.schema
     }
 
+    /// Consumes the reader and returns the underlying data source.
+    ///
+    /// Useful when callers need to release a file handle eagerly,
+    /// rewind a seekable source to read the data again, or process
+    /// any bytes that follow the data section.
+    #[must_use]
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
     /// Reads the next observation from the data file.
     ///
     /// Returns `None` once the data file has been fully consumed.

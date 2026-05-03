@@ -7,7 +7,7 @@ pub struct Schema {
     columns: Vec<Column>,
     logical_record_length: Option<usize>,
     first_line_of_file: Option<usize>,
-    lines_per_observation: Option<usize>,
+    lines_per_observation: usize,
     declared_data_path: Option<String>,
     warnings: Vec<DctWarning>,
 }
@@ -18,7 +18,7 @@ impl Schema {
         columns: Vec<Column>,
         logical_record_length: Option<usize>,
         first_line_of_file: Option<usize>,
-        lines_per_observation: Option<usize>,
+        lines_per_observation: usize,
         declared_data_path: Option<String>,
         warnings: Vec<DctWarning>,
     ) -> Self {
@@ -56,11 +56,15 @@ impl Schema {
         self.first_line_of_file
     }
 
-    /// Number of physical lines per logical observation. `None` means
-    /// 1.
+    /// Number of physical lines per logical observation.
+    ///
+    /// Always at least `1`. Single-line observations report `1`;
+    /// multi-line observations report one more than the number of
+    /// `_newline` directives encountered while parsing the
+    /// dictionary body.
     #[must_use]
     #[inline]
-    pub fn lines_per_observation(&self) -> Option<usize> {
+    pub fn lines_per_observation(&self) -> usize {
         self.lines_per_observation
     }
 

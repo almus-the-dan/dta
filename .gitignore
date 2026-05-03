@@ -28,6 +28,7 @@ Cargo.lock
 
 # IDE files
 .idea
+.zed
 
 # Bench files
 benches/data
