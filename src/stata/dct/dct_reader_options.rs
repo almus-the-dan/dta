@@ -6,6 +6,9 @@ use super::dct_error::Result;
 use super::dct_reader::DctReader;
 use super::schema::Schema;
 
+#[cfg(feature = "tokio")]
+use super::async_dct_reader::AsyncDctReader;
+
 /// Configuration for constructing a [`DctReader`] from a parsed
 /// [`Schema`].
 ///
@@ -56,6 +59,53 @@ impl DctReaderOptions {
     pub fn from_path(self, path: impl AsRef<Path>) -> Result<DctReader<BufReader<File>>> {
         let file = File::open(path)?;
         let reader = self.from_file(file);
+        Ok(reader)
+    }
+
+    /// Creates an [`AsyncDctReader`] wrapping the given async
+    /// buffered source.
+    ///
+    /// For best performance, wrap the source in a
+    /// [`tokio::io::BufReader`] before passing it here.
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    #[must_use]
+    #[inline]
+    pub fn from_tokio_reader<R: tokio::io::AsyncBufRead + Unpin>(
+        self,
+        reader: R,
+    ) -> AsyncDctReader<R> {
+        AsyncDctReader::new(self.schema, reader)
+    }
+
+    /// Creates an [`AsyncDctReader`] wrapping the async file in a
+    /// [`tokio::io::BufReader`].
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    #[must_use]
+    #[inline]
+    pub fn from_tokio_file(
+        self,
+        file: tokio::fs::File,
+    ) -> AsyncDctReader<tokio::io::BufReader<tokio::fs::File>> {
+        let reader = tokio::io::BufReader::new(file);
+        self.from_tokio_reader(reader)
+    }
+
+    /// Opens the file at `path` asynchronously and wraps it in a
+    /// [`tokio::io::BufReader`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if the file cannot be opened.
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    pub async fn from_tokio_path(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<AsyncDctReader<tokio::io::BufReader<tokio::fs::File>>> {
+        let file = tokio::fs::File::open(path).await?;
+        let reader = self.from_tokio_file(file);
         Ok(reader)
     }
 }

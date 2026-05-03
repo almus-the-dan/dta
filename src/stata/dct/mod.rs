@@ -20,6 +20,9 @@
 //! `\r`-delimited file would be read as a single very long line.
 
 #[cfg(feature = "tokio")]
+/// Async data-row reader paired with a parsed schema.
+pub mod async_dct_reader;
+#[cfg(feature = "tokio")]
 mod async_parser;
 /// Per-variable column declaration parsed from the dictionary.
 pub mod column;
@@ -55,6 +58,8 @@ pub mod value;
 /// Storage type vocabulary used by `DctColumn`.
 pub mod variable_type;
 
+#[cfg(feature = "tokio")]
+pub use async_dct_reader::AsyncDctReader;
 pub use column::Column;
 pub use dct_error::{DctError, Result};
 pub use dct_reader::DctReader;
