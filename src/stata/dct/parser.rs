@@ -1,8 +1,6 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::iter::Peekable;
 use std::ops::Range;
-use std::path::Path;
 
 use crate::stata::dct::column::Column;
 use crate::stata::dct::dct_error::{DctError, Result};
@@ -17,17 +15,13 @@ use crate::stata::dct::variable_type::VariableType;
 
 /// Parses a `.dct` dictionary from a buffered reader.
 ///
-/// On success the returned [`DctSource`] indicates whether the
-/// associated data file is embedded in the same source (data follows
-/// the closing `}`) or external (referenced by the dictionary's
-/// `using` clause, or supplied separately by the caller).
-///
-/// # Errors
-///
-/// Returns [`DctError`] when an I/O error occurs, the dictionary
-/// ends before its closing `}`, the opening `dictionary {` line is
-/// malformed, or any directive fails to parse.
-pub fn parse_dct<R: BufRead>(reader: R) -> Result<DctSource<R>> {
+/// Crate-private. Public callers go through
+/// [`DctSource::options`](crate::stata::dct::dct_source::DctSource::options)
+/// and the
+/// [`DctSourceOptions`](crate::stata::dct::dct_source_options::DctSourceOptions)
+/// builder so future configuration knobs can land without breaking
+/// the construction surface.
+pub(super) fn parse_dct<R: BufRead>(reader: R) -> Result<DctSource<R>> {
     let mut cursor = LineCursor::new(reader);
     let declared_data_path = parse_dictionary_header(&mut cursor)?;
     let body = parse_body(&mut cursor)?;
@@ -54,18 +48,6 @@ pub fn parse_dct<R: BufRead>(reader: R) -> Result<DctSource<R>> {
         DctSource::External(schema)
     };
     Ok(source)
-}
-
-/// Opens the file at `path` and parses it as a `.dct` dictionary.
-///
-/// # Errors
-///
-/// Returns [`DctError`] if the file cannot be opened or its contents
-/// fail to parse.
-pub fn open_dct<P: AsRef<Path>>(path: P) -> Result<DctSource<BufReader<File>>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    parse_dct(reader)
 }
 
 fn has_more_data<R: BufRead>(reader: &mut R) -> Result<bool> {

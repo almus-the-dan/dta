@@ -2,7 +2,6 @@ use std::path::Path;
 
 use dta::stata::dct::dct_reader::DctReader;
 use dta::stata::dct::dct_source::DctSource;
-use dta::stata::dct::parser::open_dct;
 
 #[test]
 #[ignore = "Using local files that require a license"]
@@ -11,7 +10,9 @@ fn read_2002_fem_preg_schema_and_records() {
     let dictionary_path = directory.join("2002FemPreg.dct");
     let data_path = directory.join("2002FemPreg.dat");
 
-    let source = open_dct(&dictionary_path).expect("dictionary should parse");
+    let source = DctSource::options()
+        .from_path(&dictionary_path)
+        .expect("dictionary should parse");
     let DctSource::External(schema) = source else {
         panic!("expected an external data file, but the dictionary embeds its data");
     };

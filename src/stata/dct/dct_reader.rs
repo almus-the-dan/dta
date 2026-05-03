@@ -525,25 +525,25 @@ fn record_offset_overflow(column: &Column, observation: usize) -> DctError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stata::dct::parser::parse_dct;
+    use crate::stata::dct::dct_source::DctSource;
     use std::io::Cursor;
 
     fn parse_with_data(input: &[u8]) -> DctReader<Cursor<&[u8]>> {
-        let source = parse_dct(Cursor::new(input)).unwrap();
-        match source {
-            crate::stata::dct::dct_source::DctSource::Embedded(reader) => reader,
-            crate::stata::dct::dct_source::DctSource::External(_) => {
-                panic!("expected embedded data")
-            }
-        }
+        let source = DctSource::options()
+            .from_reader(Cursor::new(input))
+            .unwrap();
+        let DctSource::Embedded(reader) = source else {
+            panic!("expected embedded data")
+        };
+        reader
     }
 
     fn external_with_data<'a>(dict: &[u8], data: &'a [u8]) -> DctReader<Cursor<&'a [u8]>> {
-        let source = parse_dct(Cursor::new(dict)).unwrap();
-        let crate::stata::dct::dct_source::DctSource::External(schema) = source else {
+        let source = DctSource::options().from_reader(Cursor::new(dict)).unwrap();
+        let DctSource::External(schema) = source else {
             panic!("expected external schema");
         };
-        DctReader::new(schema, Cursor::new(data))
+        DctReader::options(schema).from_reader(Cursor::new(data))
     }
 
     #[test]

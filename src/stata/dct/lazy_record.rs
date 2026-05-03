@@ -87,17 +87,18 @@ impl<'a> LazyRecord<'a> {
 mod tests {
     use super::*;
     use crate::stata::dct::dct_source::DctSource;
-    use crate::stata::dct::parser::parse_dct;
     use crate::stata::stata_byte::StataByte;
     use crate::stata::stata_int::StataInt;
     use std::io::Cursor;
 
     fn parse_with_data(input: &[u8]) -> crate::stata::dct::dct_reader::DctReader<Cursor<&[u8]>> {
-        let source = parse_dct(Cursor::new(input)).unwrap();
-        match source {
-            DctSource::Embedded(reader) => reader,
-            DctSource::External(_) => panic!("expected embedded data"),
-        }
+        let source = DctSource::options()
+            .from_reader(Cursor::new(input))
+            .unwrap();
+        let DctSource::Embedded(reader) = source else {
+            panic!("expected embedded data")
+        };
+        reader
     }
 
     #[test]

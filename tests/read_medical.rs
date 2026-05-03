@@ -2,7 +2,6 @@ use std::path::Path;
 
 use dta::stata::dct::dct_reader::DctReader;
 use dta::stata::dct::dct_source::DctSource;
-use dta::stata::dct::parser::open_dct;
 use dta::stata::dct::value::Value;
 
 /// Reads the canonical Stata-docs `medical.data` example, where the
@@ -14,7 +13,9 @@ fn read_medical_external() {
     let dictionary_path = directory.join("medical.dct");
     let data_path = directory.join("medical.data");
 
-    let source = open_dct(&dictionary_path).expect("dictionary should parse");
+    let source = DctSource::options()
+        .from_path(&dictionary_path)
+        .expect("dictionary should parse");
     let DctSource::External(schema) = source else {
         panic!("expected the dictionary to declare an external data file");
     };
@@ -37,7 +38,9 @@ fn read_medical_external() {
 fn read_medical_embedded() {
     let dictionary_path = Path::new("/mnt/c/Publish/medical-embedded/medical.dct");
 
-    let source = open_dct(dictionary_path).expect("dictionary should parse");
+    let source = DctSource::options()
+        .from_path(dictionary_path)
+        .expect("dictionary should parse");
     let DctSource::Embedded(mut reader) = source else {
         panic!("expected the dictionary to embed its data after the closing brace");
     };

@@ -29,6 +29,8 @@ pub mod dct_reader;
 pub mod dct_reader_options;
 /// External vs. embedded data classification returned by the parser.
 pub mod dct_source;
+/// Options builder for parsing a [`DctSource`].
+pub mod dct_source_options;
 /// Non-fatal warning channel.
 pub mod dct_warning;
 /// Input format vocabulary derived from the `%infmt` token.
@@ -39,8 +41,7 @@ mod line_ending;
 /// Numeric sub-format (fixed-point, general, scientific) implied by a
 /// fixed-width numeric `%infmt`.
 pub mod numeric_style;
-/// Dictionary parser entry points (`parse_dct`, `open_dct`).
-pub mod parser;
+mod parser;
 /// A single parsed observation.
 pub mod record;
 /// The parsed dictionary, excluding data.
@@ -55,11 +56,11 @@ pub use dct_error::{DctError, Result};
 pub use dct_reader::DctReader;
 pub use dct_reader_options::DctReaderOptions;
 pub use dct_source::DctSource;
+pub use dct_source_options::DctSourceOptions;
 pub use dct_warning::DctWarning;
 pub use input_format::InputFormat;
 pub use lazy_record::LazyRecord;
 pub use numeric_style::NumericStyle;
-pub use parser::{open_dct, parse_dct};
 pub use record::Record;
 pub use schema::Schema;
 pub use value::Value;
