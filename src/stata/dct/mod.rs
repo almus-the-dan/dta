@@ -31,6 +31,7 @@ pub mod dct_reader_options;
 pub mod dct_source;
 /// Options builder for parsing a [`DctSource`].
 pub mod dct_source_options;
+mod dct_source_state;
 /// Non-fatal warning channel.
 pub mod dct_warning;
 /// Input format vocabulary derived from the `%infmt` token.
