@@ -29,6 +29,7 @@ pub mod dct_error;
 pub mod dct_reader;
 /// Options builder for constructing a [`DctReader`].
 pub mod dct_reader_options;
+mod dct_reader_state;
 /// External vs. embedded data classification returned by the parser.
 pub mod dct_source;
 /// Options builder for parsing a [`DctSource`].

@@ -273,7 +273,6 @@ fn tokenize(line: &str, ranges: &mut Vec<Range<usize>>) {
 
 /// Resolves a byte range produced by [`tokenize`] back to its
 /// `&str` slice within `line`.
-#[inline]
 fn token<'a>(line: &'a str, range: &Range<usize>) -> &'a str {
     &line[range.start..range.end]
 }

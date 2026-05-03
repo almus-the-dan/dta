@@ -1,23 +1,12 @@
-use crate::stata::dct::line_ending::strip_terminator;
-use crate::stata::missing_value::MissingValue;
-use crate::stata::stata_byte::{DTA_113_MAX_INT8, StataByte};
-use crate::stata::stata_double::StataDouble;
-use crate::stata::stata_float::StataFloat;
-use crate::stata::stata_int::{DTA_113_MAX_INT16, StataInt};
-use crate::stata::stata_long::{DTA_113_MAX_INT32, StataLong};
-use std::borrow::Cow;
 use std::io::BufRead;
 
-use super::column::Column;
-use super::dct_error::{DctError, Result};
+use super::dct_error::Result;
 use super::dct_reader_options::DctReaderOptions;
+use super::dct_reader_state::{DctReaderState, LineOutcome};
 use super::dct_warning::DctWarning;
-use super::input_format::InputFormat;
 use super::lazy_record::LazyRecord;
 use super::record::Record;
 use super::schema::Schema;
-use super::value::Value;
-use super::variable_type::VariableType;
 
 /// Reads logical observations from a data file described by a
 /// [`Schema`].
@@ -37,11 +26,7 @@ use super::variable_type::VariableType;
 #[derive(Debug)]
 pub struct DctReader<R> {
     inner: R,
-    schema: Schema,
-    line_buffers: Vec<String>,
-    observation_number: usize,
-    completed: bool,
-    warnings: Vec<DctWarning>,
+    state: DctReaderState,
 }
 
 impl DctReader<()> {
@@ -70,11 +55,7 @@ impl<R> DctReader<R> {
     pub(super) fn new(schema: Schema, inner: R) -> Self {
         Self {
             inner,
-            schema,
-            line_buffers: Vec::new(),
-            observation_number: 0,
-            completed: false,
-            warnings: Vec::new(),
+            state: DctReaderState::new(schema),
         }
     }
 
@@ -82,7 +63,7 @@ impl<R> DctReader<R> {
     #[must_use]
     #[inline]
     pub fn schema(&self) -> &Schema {
-        &self.schema
+        self.state.schema()
     }
 
     /// Warnings produced while reading the most recent observation.
@@ -95,7 +76,7 @@ impl<R> DctReader<R> {
     #[must_use]
     #[inline]
     pub fn warnings(&self) -> &[DctWarning] {
-        &self.warnings
+        self.state.warnings()
     }
 
     /// Consumes the reader and returns the underlying data source.
@@ -119,7 +100,7 @@ impl<R: BufRead> DctReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DctError`](DctError) on I/O
+    /// Returns [`DctError`](super::dct_error::DctError) on I/O
     /// failure, when the data file ends in the middle of an
     /// observation, or when a field cannot be parsed against the
     /// column's declared type and read format.
@@ -127,8 +108,7 @@ impl<R: BufRead> DctReader<R> {
         if !self.advance_to_next_observation()? {
             return Ok(None);
         }
-
-        let record = self.build_record()?;
+        let record = self.state.build_record()?;
         Ok(Some(record))
     }
 
@@ -147,385 +127,52 @@ impl<R: BufRead> DctReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DctError`] on I/O failure or when the data file
-    /// ends mid-observation.
+    /// Returns [`DctError`](super::dct_error::DctError) on I/O
+    /// failure or when the data file ends mid-observation.
     pub fn read_lazy_record(&mut self) -> Result<Option<LazyRecord<'_>>> {
         if !self.advance_to_next_observation()? {
             return Ok(None);
         }
-
-        let lazy = LazyRecord::new(
-            &self.line_buffers,
-            self.schema.columns(),
-            self.observation_number,
-        );
-        Ok(Some(lazy))
+        Ok(Some(self.state.build_lazy_record()))
     }
 
-    /// Shared setup for `read_record` and `read_lazy_record`. Clears
-    /// per-record state, loads the next observation's lines into the
-    /// internal buffers, and bumps `observation_number`. Returns
-    /// `Ok(false)` on a clean end-of-data, `Ok(true)` when an
-    /// observation is staged and ready to be parsed.
+    /// Shared sync read loop: drives [`DctReaderState`] through one
+    /// observation's worth of lines. Returns `Ok(false)` on a clean
+    /// end-of-data, `Ok(true)` when an observation has been staged
+    /// and is ready to be parsed.
     fn advance_to_next_observation(&mut self) -> Result<bool> {
-        if self.completed {
+        if self.state.is_completed() {
             return Ok(false);
         }
-
-        self.warnings.clear();
-
-        let lines_per_observation = self.schema.lines_per_observation();
-        self.line_buffers
-            .resize_with(lines_per_observation, String::new);
-        for buffer in &mut self.line_buffers {
-            buffer.clear();
-        }
-
-        if !self.read_lines()? {
-            return Ok(false);
-        }
-
-        self.observation_number += 1;
-        Ok(true)
-    }
-
-    fn read_lines(&mut self) -> Result<bool> {
-        let lines_per_observation = self.schema.lines_per_observation();
+        let lines_per_observation = self.state.begin_observation();
         for line_index in 0..lines_per_observation {
-            let read_count = self.inner.read_line(&mut self.line_buffers[line_index])?;
-            if read_count == 0 {
-                self.completed = true;
-                if line_index == 0 {
-                    return Ok(false);
+            let buffer = self.state.line_buffer_mut(line_index);
+            let bytes_read = self.inner.read_line(buffer)?;
+            match self.state.finalize_line(line_index, bytes_read) {
+                LineOutcome::Read => {}
+                LineOutcome::CleanEof => return Ok(false),
+                LineOutcome::PartialObservation => {
+                    return Err(self.state.unexpected_eof_error());
                 }
-                let error = DctError::UnexpectedEofInData {
-                    observation: self.observation_number + 1,
-                    variables_read: 0,
-                };
-                return Err(error);
             }
-            strip_terminator(&mut self.line_buffers[line_index]);
         }
+        self.state.advance_observation();
         Ok(true)
-    }
-
-    fn build_record(&mut self) -> Result<Record<'_>> {
-        let mut values = Vec::with_capacity(self.schema.columns().len());
-        for column in self.schema.columns() {
-            let line = &self.line_buffers[column.line_offset()];
-            let value = parse_field(
-                line,
-                column,
-                self.observation_number,
-                Some(&mut self.warnings),
-            )?;
-            values.push(value);
-        }
-
-        let record = Record::new(values);
-        Ok(record)
-    }
-}
-
-pub(super) fn parse_field<'a>(
-    line: &'a str,
-    column: &Column,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    match column.input_format() {
-        InputFormat::FixedNumeric {
-            width, decimals, ..
-        } => parse_fixed_numeric(line, column, width, decimals, observation, warnings),
-        InputFormat::FixedString { width } => {
-            parse_fixed_string(line, column, width, observation, warnings)
-        }
-        InputFormat::FreeNumeric => parse_free_numeric(line, column, observation, warnings),
-        InputFormat::FreeString => Ok(parse_free_string(line, column.offset())),
-    }
-}
-
-fn parse_fixed_numeric<'a>(
-    line: &str,
-    column: &Column,
-    width: usize,
-    decimals: u8,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    let offset = column.offset();
-    let end = offset
-        .checked_add(width)
-        .ok_or_else(|| record_offset_overflow(column, observation))?;
-
-    let line_len = line.len();
-    let truncated = end > line_len;
-    let raw_field = &line[offset.min(line_len)..end.min(line_len)];
-    let trimmed = raw_field.trim_ascii();
-
-    if trimmed.is_empty() {
-        if truncated && let Some(warnings) = warnings {
-            let variable = column.name().to_string();
-            let warning = DctWarning::BlankFieldTreatedAsMissing {
-                variable,
-                observation,
-            };
-            warnings.push(warning);
-        }
-        let value = missing_value_for(column.storage_type());
-        return Ok(value);
-    }
-    if trimmed == "." {
-        let value = missing_value_for(column.storage_type());
-        return Ok(value);
-    }
-
-    let raw: f64 = trimmed
-        .parse()
-        .map_err(|_| invalid_numeric(column, observation, trimmed))?;
-    let shifted = if decimals == 0 {
-        raw
-    } else {
-        raw / 10f64.powi(i32::from(decimals))
-    };
-
-    coerce_numeric(shifted, column, observation, warnings)
-}
-
-fn parse_free_numeric<'a>(
-    line: &str,
-    column: &Column,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    let token = take_free_token(line, column.offset());
-
-    if token.is_empty() || token == "." {
-        let value = missing_value_for(column.storage_type());
-        return Ok(value);
-    }
-
-    let raw: f64 = token
-        .parse()
-        .map_err(|_| invalid_numeric(column, observation, token))?;
-    coerce_numeric(raw, column, observation, warnings)
-}
-
-fn parse_fixed_string<'a>(
-    line: &'a str,
-    column: &Column,
-    width: usize,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    let offset = column.offset();
-    let end = offset
-        .checked_add(width)
-        .ok_or_else(|| record_offset_overflow(column, observation))?;
-
-    let line_len = line.len();
-    let truncated = end > line_len;
-    let raw = &line[offset.min(line_len)..end.min(line_len)];
-    // Stata convention: trailing spaces are padding, not data. Leading
-    // spaces are typically meaningful (and trim_ascii would also trim
-    // them, which we don't want), so trim only the end.
-    let trimmed = raw.trim_ascii_end();
-
-    if truncated
-        && trimmed.is_empty()
-        && let Some(warnings) = warnings
-    {
-        let variable = column.name().to_string();
-        let warning = DctWarning::BlankFieldTreatedAsMissing {
-            variable,
-            observation,
-        };
-        warnings.push(warning);
-    }
-
-    Ok(Value::String(Cow::Borrowed(trimmed)))
-}
-
-fn parse_free_string(line: &str, offset: usize) -> Value<'_> {
-    let from = offset.min(line.len());
-    let after = line[from..].trim_ascii_start();
-
-    if let Some(body) = after.strip_prefix('"') {
-        let close = body.find('"').unwrap_or(body.len());
-        let slice = &body[..close];
-        return Value::String(Cow::Borrowed(slice));
-    }
-
-    let end = after
-        .find(|c: char| c.is_ascii_whitespace())
-        .unwrap_or(after.len());
-    let slice = &after[..end];
-    Value::String(Cow::Borrowed(slice))
-}
-
-/// Returns the next whitespace-delimited token at or after `offset`,
-/// skipping leading whitespace. Returns an empty string if no token
-/// is available before end of line.
-fn take_free_token(line: &str, offset: usize) -> &str {
-    let from = offset.min(line.len());
-    let after = line[from..].trim_ascii_start();
-    let end = after
-        .find(|c: char| c.is_ascii_whitespace())
-        .unwrap_or(after.len());
-    &after[..end]
-}
-
-fn missing_value_for(storage_type: VariableType) -> Value<'static> {
-    match storage_type {
-        VariableType::Byte => Value::Byte(StataByte::Missing(MissingValue::System)),
-        VariableType::Int => Value::Int(StataInt::Missing(MissingValue::System)),
-        VariableType::Long => Value::Long(StataLong::Missing(MissingValue::System)),
-        VariableType::Float => Value::Float(StataFloat::Missing(MissingValue::System)),
-        VariableType::Double => Value::Double(StataDouble::Missing(MissingValue::System)),
-        VariableType::String => Value::String(Cow::Borrowed("")),
-    }
-}
-
-fn coerce_numeric<'a>(
-    value: f64,
-    column: &Column,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    if !value.is_finite() {
-        return Err(invalid_numeric(column, observation, &value.to_string()));
-    }
-    match column.storage_type() {
-        VariableType::Byte | VariableType::Int | VariableType::Long => {
-            promote_integer(value, column, observation, warnings)
-        }
-        VariableType::Float => Ok(Value::Float(StataFloat::Present(f64_to_f32(value)))),
-        VariableType::Double => Ok(Value::Double(StataDouble::Present(value))),
-        VariableType::String => Err(invalid_numeric(column, observation, &value.to_string())),
-    }
-}
-
-/// Tries to fit `value` into the declared integer storage type;
-/// promotes to the next wider type if it doesn't fit, all the way up
-/// to `Double`. Emits a [`DctWarning::IntegerPromotion`] warning when
-/// promotion happens. Matches Stata's permissive-import behavior:
-/// a too-narrow declared type is a hint, not a hard guarantee.
-fn promote_integer<'a>(
-    value: f64,
-    column: &Column,
-    observation: usize,
-    warnings: Option<&mut Vec<DctWarning>>,
-) -> Result<Value<'a>> {
-    let declared = column.storage_type();
-    let rounded = value.round();
-    let chain = promotion_chain(declared);
-
-    for &candidate in chain {
-        if let Some(fitted) = fit_integer(rounded, candidate) {
-            if candidate != declared
-                && let Some(warnings) = warnings
-            {
-                let variable = column.name().to_string();
-                let warning = DctWarning::IntegerPromotion {
-                    variable,
-                    observation,
-                    from: declared,
-                    to: candidate,
-                };
-                warnings.push(warning);
-            }
-            return Ok(fitted);
-        }
-    }
-
-    Err(invalid_numeric(column, observation, &value.to_string()))
-}
-
-fn promotion_chain(declared: VariableType) -> &'static [VariableType] {
-    match declared {
-        VariableType::Byte => &[
-            VariableType::Byte,
-            VariableType::Int,
-            VariableType::Long,
-            VariableType::Double,
-        ],
-        VariableType::Int => &[VariableType::Int, VariableType::Long, VariableType::Double],
-        VariableType::Long => &[VariableType::Long, VariableType::Double],
-        _ => &[],
-    }
-}
-
-/// Constructs a `Value` of `target` if `rounded` is in range. The
-/// caller is responsible for having already rounded the value.
-fn fit_integer<'a>(rounded: f64, target: VariableType) -> Option<Value<'a>> {
-    match target {
-        VariableType::Byte => fit_i8(rounded).map(|n| Value::Byte(StataByte::Present(n))),
-        VariableType::Int => fit_i16(rounded).map(|n| Value::Int(StataInt::Present(n))),
-        VariableType::Long => fit_i32(rounded).map(|n| Value::Long(StataLong::Present(n))),
-        VariableType::Double => Some(Value::Double(StataDouble::Present(rounded))),
-        _ => None,
-    }
-}
-
-// Stata's typed integer storages reserve the top of their numeric
-// range for missing-value markers. The `DTA_113_MAX_INT*` constants
-// imported above give the V113+ ceilings — V113+ is the strictest
-// layout (27 values reserved per type for system missing plus
-// `.a`–`.z`), so anything that fits the V113+ present range also
-// fits every older format. Negative values aren't reserved in any
-// release, so the floor stays at `iN::MIN`.
-
-#[allow(clippy::cast_possible_truncation)]
-fn fit_i8(value: f64) -> Option<i8> {
-    if (f64::from(i8::MIN)..=f64::from(DTA_113_MAX_INT8)).contains(&value) {
-        Some(value as i8)
-    } else {
-        None
-    }
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn fit_i16(value: f64) -> Option<i16> {
-    if (f64::from(i16::MIN)..=f64::from(DTA_113_MAX_INT16)).contains(&value) {
-        Some(value as i16)
-    } else {
-        None
-    }
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn fit_i32(value: f64) -> Option<i32> {
-    if (f64::from(i32::MIN)..=f64::from(DTA_113_MAX_INT32)).contains(&value) {
-        Some(value as i32)
-    } else {
-        None
-    }
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn f64_to_f32(value: f64) -> f32 {
-    value as f32
-}
-
-fn invalid_numeric(column: &Column, observation: usize, content: &str) -> DctError {
-    DctError::InvalidNumericValue {
-        observation,
-        variable: column.name().to_string(),
-        content: content.to_string(),
-    }
-}
-
-fn record_offset_overflow(column: &Column, observation: usize) -> DctError {
-    DctError::RecordOffsetOverflow {
-        observation,
-        variable: column.name().to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stata::dct::dct_error::DctError;
     use crate::stata::dct::dct_source::DctSource;
+    use crate::stata::dct::value::Value;
+    use crate::stata::dct::variable_type::VariableType;
+    use crate::stata::missing_value::MissingValue;
+    use crate::stata::stata_byte::StataByte;
+    use crate::stata::stata_double::StataDouble;
+    use crate::stata::stata_float::StataFloat;
+    use crate::stata::stata_int::StataInt;
     use std::io::Cursor;
 
     fn parse_with_data(input: &[u8]) -> DctReader<Cursor<&[u8]>> {

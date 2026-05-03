@@ -1,6 +1,6 @@
 use super::column::Column;
 use super::dct_error::{DctError, Result};
-use super::dct_reader::parse_field;
+use super::dct_reader_state::parse_field;
 use super::value::Value;
 
 /// A single observation that decodes its values on demand.
