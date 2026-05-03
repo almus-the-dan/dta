@@ -19,6 +19,8 @@
 //! supporting them would require a different reading strategy. A
 //! `\r`-delimited file would be read as a single very long line.
 
+#[cfg(feature = "tokio")]
+mod async_parser;
 /// Per-variable column declaration parsed from the dictionary.
 pub mod column;
 /// Error type for DCT parsing and reading.

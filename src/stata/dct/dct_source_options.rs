@@ -66,4 +66,58 @@ impl DctSourceOptions {
         let file = File::open(path)?;
         self.from_file(file)
     }
+
+    /// Parses a `.dct` dictionary from an async buffered reader.
+    ///
+    /// For the best performance, wrap the source in a
+    /// [`tokio::io::BufReader`] before passing it here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DctError`](super::dct_error::DctError) on the same
+    /// conditions as [`from_reader`](Self::from_reader).
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    #[inline]
+    pub async fn from_tokio_reader<R: tokio::io::AsyncBufRead + Unpin>(
+        self,
+        reader: R,
+    ) -> Result<DctSource<R>> {
+        super::async_parser::parse_dct(reader).await
+    }
+
+    /// Parses a `.dct` dictionary from an open async file, wrapping
+    /// it in a [`tokio::io::BufReader`] first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DctError`](super::dct_error::DctError) if the
+    /// dictionary fails to parse.
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    #[inline]
+    pub async fn from_tokio_file(
+        self,
+        file: tokio::fs::File,
+    ) -> Result<DctSource<tokio::io::BufReader<tokio::fs::File>>> {
+        let reader = tokio::io::BufReader::new(file);
+        self.from_tokio_reader(reader).await
+    }
+
+    /// Opens the file at `path` asynchronously and parses it as a
+    /// `.dct` dictionary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DctError`](super::dct_error::DctError) if the file
+    /// cannot be opened or its contents fail to parse.
+    //noinspection RsSelfConvention
+    #[cfg(feature = "tokio")]
+    pub async fn from_tokio_path(
+        self,
+        path: impl AsRef<Path>,
+    ) -> Result<DctSource<tokio::io::BufReader<tokio::fs::File>>> {
+        let file = tokio::fs::File::open(path).await?;
+        self.from_tokio_file(file).await
+    }
 }

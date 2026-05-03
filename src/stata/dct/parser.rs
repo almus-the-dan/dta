@@ -24,8 +24,8 @@ use super::dct_source_state::{DctSourceState, FeedOutcome};
 pub(super) fn parse_dct<R: BufRead>(mut reader: R) -> Result<DctSource<R>> {
     let mut state = DctSourceState::new();
     loop {
-        let n = reader.read_line(state.buffer_mut())?;
-        if n == 0 {
+        let read = reader.read_line(state.buffer_mut())?;
+        if read == 0 {
             return Err(DctError::UnexpectedEofInDictionary);
         }
         let result = state.feed_buffered_line()?;
