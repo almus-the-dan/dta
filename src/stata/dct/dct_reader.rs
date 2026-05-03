@@ -10,6 +10,7 @@ use std::io::BufRead;
 
 use super::column::Column;
 use super::dct_error::{DctError, Result};
+use super::dct_reader_options::DctReaderOptions;
 use super::dct_warning::DctWarning;
 use super::input_format::InputFormat;
 use super::lazy_record::LazyRecord;
@@ -34,7 +35,7 @@ use super::variable_type::VariableType;
 /// safe to call inside a streaming loop without unbounded memory
 /// growth on large files.
 #[derive(Debug)]
-pub struct DctReader<R: BufRead> {
+pub struct DctReader<R> {
     inner: R,
     schema: Schema,
     line_buffers: Vec<String>,
@@ -43,15 +44,30 @@ pub struct DctReader<R: BufRead> {
     warnings: Vec<DctWarning>,
 }
 
-impl<R: BufRead> DctReader<R> {
+impl DctReader<()> {
+    /// Creates a [`DctReaderOptions`] for the given schema.
+    ///
+    /// This is the entry point for constructing a `DctReader`:
+    /// configure any reader options on the returned builder, then
+    /// finish with one of `from_reader` / `from_file` / `from_path`.
+    /// `DctReader::new` is intentionally not public — going through
+    /// the options builder lets new configuration knobs ship without
+    /// breaking callers.
+    #[must_use]
+    #[inline]
+    pub fn options(schema: Schema) -> DctReaderOptions {
+        DctReaderOptions::new(schema)
+    }
+}
+
+impl<R> DctReader<R> {
     /// Constructs a reader from a parsed schema and a data source.
     ///
-    /// Use this when [`parse_dct`](super::parser::parse_dct) returned
-    /// [`DctSource::External`](super::dct_source::DctSource::External) and
-    /// you have separately opened the data file declared in the
-    /// dictionary's `using` clause.
-    #[must_use]
-    pub fn new(schema: Schema, inner: R) -> Self {
+    /// Crate-private. External callers go through
+    /// [`DctReader::options`] / [`DctReaderOptions`] so future
+    /// configuration knobs can be added without breaking the
+    /// construction surface.
+    pub(super) fn new(schema: Schema, inner: R) -> Self {
         Self {
             inner,
             schema,
@@ -91,7 +107,9 @@ impl<R: BufRead> DctReader<R> {
     pub fn into_inner(self) -> R {
         self.inner
     }
+}
 
+impl<R: BufRead> DctReader<R> {
     /// Reads the next observation from the data file.
     ///
     /// Returns `None` once the data file has been fully consumed.

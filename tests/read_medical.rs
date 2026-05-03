@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 use dta::stata::dct::dct_reader::DctReader;
@@ -25,8 +23,9 @@ fn read_medical_external() {
     assert_eq!(schema.columns().len(), 4);
     assert_eq!(schema.declared_data_path(), Some("medical.data"));
 
-    let data_file = File::open(&data_path).expect("data file should open");
-    let mut reader = DctReader::new(schema, BufReader::new(data_file));
+    let mut reader = DctReader::options(schema)
+        .from_path(&data_path)
+        .expect("data file should open");
 
     let observations = collect_observations(&mut reader);
     assert_eq!(observations, expected_observations());

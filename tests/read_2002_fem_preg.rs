@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 use dta::stata::dct::dct_reader::DctReader;
@@ -23,9 +21,9 @@ fn read_2002_fem_preg_schema_and_records() {
         "dictionary should declare at least one variable",
     );
 
-    let data_file = File::open(&data_path).expect("data file should open");
-    let reader = BufReader::new(data_file);
-    let mut reader = DctReader::new(schema, reader);
+    let mut reader = DctReader::options(schema)
+        .from_path(&data_path)
+        .expect("data file should open");
 
     let mut record_count: usize = 0;
     while let Some(record) = reader.read_record().expect("record should read") {

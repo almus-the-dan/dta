@@ -25,6 +25,8 @@ pub mod column;
 pub mod dct_error;
 /// Data-row reader paired with a parsed schema.
 pub mod dct_reader;
+/// Options builder for constructing a [`DctReader`].
+pub mod dct_reader_options;
 /// External vs. embedded data classification returned by the parser.
 pub mod dct_source;
 /// Non-fatal warning channel.
@@ -51,6 +53,7 @@ pub mod variable_type;
 pub use column::Column;
 pub use dct_error::{DctError, Result};
 pub use dct_reader::DctReader;
+pub use dct_reader_options::DctReaderOptions;
 pub use dct_source::DctSource;
 pub use dct_warning::DctWarning;
 pub use input_format::InputFormat;
