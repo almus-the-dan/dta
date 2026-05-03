@@ -31,6 +31,7 @@ pub mod dct_source;
 pub mod dct_warning;
 /// Input format vocabulary derived from the `%infmt` token.
 pub mod input_format;
+mod line_ending;
 /// Numeric sub-format (fixed-point, general, scientific) implied by a
 /// fixed-width numeric `%infmt`.
 pub mod numeric_style;

@@ -63,6 +63,25 @@ pub enum DctError {
         /// Verbatim field content.
         content: String,
     },
+    /// A column-position computation in the dictionary overflowed
+    /// `usize`. Indicates corrupt or malformed input — real DCT files
+    /// cannot reach the magnitudes that would trigger this.
+    DictionaryOffsetOverflow {
+        /// 1-based line number within the dictionary file.
+        line: usize,
+        /// Verbatim line content for diagnostic display.
+        content: String,
+    },
+    /// A column-position computation while reading a data record
+    /// overflowed `usize`. Indicates a schema whose offsets and
+    /// widths sum past `usize::MAX` — virtually impossible with
+    /// well-formed data.
+    RecordOffsetOverflow {
+        /// 1-based observation number containing the field.
+        observation: usize,
+        /// Name of the variable being parsed.
+        variable: String,
+    },
 }
 
 impl fmt::Display for DctError {
@@ -104,6 +123,18 @@ impl fmt::Display for DctError {
             } => write!(
                 f,
                 "could not parse '{content}' as a numeric value for variable \
+                 '{variable}' in observation {observation}",
+            ),
+            Self::DictionaryOffsetOverflow { line, content } => write!(
+                f,
+                "column-position computation overflowed on line {line}: {content}",
+            ),
+            Self::RecordOffsetOverflow {
+                observation,
+                variable,
+            } => write!(
+                f,
+                "column-position computation overflowed for variable \
                  '{variable}' in observation {observation}",
             ),
         }

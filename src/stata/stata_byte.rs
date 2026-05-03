@@ -29,7 +29,7 @@ use super::stata_int::StataInt;
 use super::stata_long::StataLong;
 
 /// Maximum valid (non-missing) Stata byte value for DTA 113+.
-const DTA_113_MAX_INT8: i8 = 100;
+pub(crate) const DTA_113_MAX_INT8: i8 = 100;
 
 /// Raw byte value encoding system missing (`.`) in DTA 113+.
 const MISSING_BYTE_SYSTEM_113: u8 = 0x65;

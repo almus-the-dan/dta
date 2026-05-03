@@ -30,7 +30,7 @@ use super::stata_error::{Result, StataError};
 use super::stata_int::StataInt;
 
 /// Maximum valid (non-missing) Stata long value for DTA 113+.
-const DTA_113_MAX_INT32: i32 = 2_147_483_620;
+pub(crate) const DTA_113_MAX_INT32: i32 = 2_147_483_620;
 
 /// Raw u32 value encoding system missing (`.`) in DTA 113+.
 const MISSING_LONG_SYSTEM_113: u32 = 0x7FFF_FFE5;

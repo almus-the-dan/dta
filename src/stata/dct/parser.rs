@@ -10,6 +10,7 @@ use crate::stata::dct::dct_reader::DctReader;
 use crate::stata::dct::dct_source::DctSource;
 use crate::stata::dct::dct_warning::DctWarning;
 use crate::stata::dct::input_format::InputFormat;
+use crate::stata::dct::line_ending::strip_terminator;
 use crate::stata::dct::numeric_style::NumericStyle;
 use crate::stata::dct::schema::Schema;
 use crate::stata::dct::variable_type::VariableType;
@@ -106,9 +107,7 @@ impl<R: BufRead> LineCursor<R> {
             return Ok(false);
         }
         self.line_number += 1;
-        while self.buffer.ends_with(['\n', '\r']) {
-            self.buffer.pop();
-        }
+        strip_terminator(&mut self.buffer);
         Ok(true)
     }
 
@@ -425,13 +424,21 @@ fn parse_variable_line(
         line: line_number,
         content: line.trim_ascii().to_string(),
     };
+    let overflow = || DctError::DictionaryOffsetOverflow {
+        line: line_number,
+        content: line.trim_ascii().to_string(),
+    };
 
     let mut iterator = ranges.iter().map(|range| token(line, range)).peekable();
     // Optional `_column(#)` resets to an absolute byte position;
     // optional `_skip(#)` then advances relatively. Either, both, or
     // neither may appear — neither means "start at the running
     // column pointer".
-    let offset = compute_variable_offset(&mut iterator, *cursor_offset).map_err(|()| invalid())?;
+    let offset =
+        compute_variable_offset(&mut iterator, *cursor_offset).map_err(|fault| match fault {
+            OffsetFault::Invalid => invalid(),
+            OffsetFault::Overflow => overflow(),
+        })?;
     // Optional storage type. Spec default is `float`.
     let (storage_type, storage_str_width) =
         try_parse_storage_type_width(&mut iterator).map_err(|()| invalid())?;
@@ -453,10 +460,18 @@ fn parse_variable_line(
         storage_str_width,
     ));
 
-    *cursor_offset = advance_cursor(offset, input_format);
+    *cursor_offset = advance_cursor(offset, input_format).ok_or_else(overflow)?;
 
     let column = Column::new(line_offset, offset, storage_type, name, input_format, label);
     Ok(column)
+}
+
+/// Failure mode for [`compute_variable_offset`]. Distinguishes a
+/// malformed `_column(#)` directive (e.g., non-numeric or zero) from
+/// an arithmetic overflow when combining `_column(#)` and `_skip(#)`.
+enum OffsetFault {
+    Invalid,
+    Overflow,
 }
 
 /// Resolves the variable's starting byte offset. Consumes a leading
@@ -466,15 +481,15 @@ fn parse_variable_line(
 fn compute_variable_offset<'a, I: Iterator<Item = &'a str>>(
     iterator: &mut Peekable<I>,
     cursor_offset: usize,
-) -> std::result::Result<usize, ()> {
+) -> std::result::Result<usize, OffsetFault> {
     let mut offset = cursor_offset;
     if let Some(&token) = iterator.peek()
         && token.starts_with("_column(")
     {
         iterator.next();
-        let one_based = parse_column_directive(token).ok_or(())?;
+        let one_based = parse_column_directive(token).ok_or(OffsetFault::Invalid)?;
         if one_based < 1 {
-            return Err(());
+            return Err(OffsetFault::Invalid);
         }
         offset = one_based - 1;
     }
@@ -482,7 +497,7 @@ fn compute_variable_offset<'a, I: Iterator<Item = &'a str>>(
         && let Some(skip) = parse_skip_modifier(token)
     {
         iterator.next();
-        offset = offset.saturating_add(skip);
+        offset = offset.checked_add(skip).ok_or(OffsetFault::Overflow)?;
     }
     Ok(offset)
 }
@@ -493,12 +508,14 @@ fn compute_variable_offset<'a, I: Iterator<Item = &'a str>>(
 /// at runtime, so the parser-time cursor stays where the variable
 /// started. Downstream variables that need to follow a free-format
 /// read should anchor explicitly with `_column(#)`.
-fn advance_cursor(offset: usize, input_format: InputFormat) -> usize {
+///
+/// Returns `None` when the offset+width sum overflows `usize`.
+fn advance_cursor(offset: usize, input_format: InputFormat) -> Option<usize> {
     match input_format {
         InputFormat::FixedNumeric { width, .. } | InputFormat::FixedString { width } => {
-            offset.saturating_add(width)
+            offset.checked_add(width)
         }
-        InputFormat::FreeNumeric | InputFormat::FreeString => offset,
+        InputFormat::FreeNumeric | InputFormat::FreeString => Some(offset),
     }
 }
 
@@ -939,7 +956,7 @@ mod tests {
     #[test]
     fn newline_with_no_following_columns_still_advances() {
         // Trailing _newline implies an extra physical line per observation
-        // (e.g. data files with a footer line per record).
+        // (e.g., data files with a footer line per record).
         let dict = b"dictionary {\n\
             _column(1) byte b1\n\
             _newline\n\
