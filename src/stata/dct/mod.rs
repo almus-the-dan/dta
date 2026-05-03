@@ -4,12 +4,13 @@
 //! free-format plain-text data file. This module parses the
 //! dictionary, then iterates observations from the associated data
 //! file. Data may be embedded after the dictionary's closing `}` or
-//! live in a separate file; see [`DctSource`].
+//! live in a separate file; see [`DctSource`](crate::stata::dct::DctSource).
 //!
 //! Unlike the binary DTA format, DCT files are plain ASCII and never
 //! carry `strL` references, so the DCT-domain
-//! [`Value`] / [`VariableType`] types deliberately diverge from
-//! their DTA counterparts.
+//! [`Value`](crate::stata::dct::Value) /
+//! [`VariableType`](crate::stata::dct::VariableType) types
+//! deliberately diverge from their DTA counterparts.
 //!
 //! # Line endings
 //!

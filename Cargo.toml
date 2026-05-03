@@ -1,8 +1,8 @@
 [package]
 name = "dta"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
-description = "Pure Rust streaming reader and writer for Stata's DTA file format, covering every released version (104-119), including XML-framed releases, tagged missing values, value-label sets, and long-string (strL) storage."
+description = "Pure Rust streaming reader and writer for Stata's DTA file format (every released version, 102-119), plus a parser and reader for Stata dictionary (.dct) files."
 license = "MIT"
 homepage = "https://github.com/almus-the-dan/dta"
 repository = "https://github.com/almus-the-dan/dta"

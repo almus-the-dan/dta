@@ -1,9 +1,9 @@
 //! Async data-record reader powered by tokio.
 //!
-//! Mirrors [`DctReader`](super::dct_reader::DctReader) — same
-//! [`DctReaderState`](DctReaderState) drives
-//! the parse, just with `.await`ed reads. Construct via
-//! [`DctReaderOptions::from_tokio_reader`](super::dct_reader_options::DctReaderOptions::from_tokio_reader)
+//! Mirrors [`DctReader`](crate::stata::dct::DctReader) — same
+//! `DctReaderState` drives the parse, just with `.await`ed reads.
+//! Construct via
+//! [`DctReaderOptions::from_tokio_reader`](crate::stata::dct::DctReaderOptions::from_tokio_reader)
 //! / `from_tokio_file` / `from_tokio_path`.
 
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};

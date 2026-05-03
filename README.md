@@ -1,12 +1,19 @@
 # dta
 
-A pure Rust library for reading and writing Stata's DTA file format.
+A pure Rust library for reading and writing Stata data formats.
 
-DTA is the binary format used by [Stata](https://www.stata.com/) to persist datasets. It's still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open. This library provides a streaming reader and writer covering every released version of the format (102 through 119), including XML-framed releases (117+), tagged missing values, value-label sets, and long-string (`strL`) storage.
+This crate covers two related-but-distinct file formats:
 
-The API is built around a typestate chain, so you can't accidentally write a schema before a header, or read data records before the schema has been parsed. Each phase borrows the underlying I/O handle and hands it to the next phase, keeping the whole pipeline zero-copy where possible.
+- **DTA** — the binary format Stata uses to persist datasets. Every released version is supported (102 through 119), including XML-framed releases (117+), tagged missing values, value-label sets, and long-string (`strL`) storage.
+- **DCT** — Stata's plain-text dictionary format, used to describe fixed-width or free-format `.dat`/`.raw` data files. Common when importing into Stata from external systems.
 
-## Usage
+Both formats sit under [Stata](https://www.stata.com/), still the dominant interchange format in academic economics, public health, and social science research — often the only format that downstream collaborators can actually open.
+
+The DTA API is built around a typestate chain, so you can't accidentally write a schema before a header, or read data bytes before the schema has been parsed. Each phase borrows the underlying I/O handle and hands it to the next phase, keeping the pipeline zero-copy where possible.
+
+The DCT API is a two-step builder — parse the dictionary into a `Schema`, then pair the schema with a data source to read records.
+
+## Usage — DTA
 
 ### Reading a file
 
@@ -130,6 +137,88 @@ fn write_stata(path: &str) -> Result<()> {
 
 `RecordWriter::write_record` validates arity and per-column types against the schema, so a mismatch is caught at the call site rather than producing a malformed file.
 
+## Usage — DCT
+
+A `.dct` dictionary describes the schema of a plain-text data file: where each variable starts, how wide it is, what type it is, what its name is, and (optionally) a label. The associated data may live in a separate `.dat`/`.raw` file (the dictionary's `using` clause) or inline after the closing `}`.
+
+```rust
+use dta::stata::dct::dct_reader::DctReader;
+use dta::stata::dct::dct_source::DctSource;
+use dta::stata::dct::dct_error::Result;
+
+fn read_dct(dict_path: &str, data_path: &str) -> Result<()> {
+    // Step 1: parse the dictionary. The result tells you whether the
+    // data file is embedded after the closing `}` or external.
+    let source = DctSource::options().from_path(dict_path)?;
+
+    let mut reader = match source {
+        DctSource::External(schema) => {
+            // Step 2a: open the data file separately.
+            DctReader::options(schema).from_path(data_path)?
+        }
+        DctSource::Embedded(reader) => {
+            // Step 2b: data was inlined; the reader is positioned at it.
+            reader
+        }
+    };
+
+    // Capture column names up front: the lending pattern means
+    // `record` borrows `reader` exclusively, so `reader.schema()`
+    // can't be called inside the loop body.
+    let column_names: Vec<String> = reader
+        .schema()
+        .columns()
+        .iter()
+        .map(|c| c.name().to_string())
+        .collect();
+
+    // Step 3: iterate records.
+    while let Some(record) = reader.read_record()? {
+        for (name, value) in column_names.iter().zip(record.values()) {
+            println!("{}: {:?}", name, value);
+        }
+    }
+
+    // Per-record warnings (blank short-line fields treated as
+    // missing, integers auto-promoted to a wider type) accumulate
+    // on the reader and are cleared at the start of each call.
+    for warning in reader.warnings() {
+        eprintln!("warning: {warning}");
+    }
+
+    Ok(())
+}
+```
+
+### Lazy DCT records
+
+If you only need a subset of columns per row, `read_lazy_record()` defers value decoding until you ask for it. Useful for skipping the parse work on the columns you don't care about.
+
+```rust
+while let Some(lazy) = reader.read_lazy_record()? {
+    let id = lazy.value(0)?;
+    let name = lazy.value(5)?;
+    // ...other columns are never decoded
+}
+```
+
+### What's supported
+
+The DCT parser supports the directives you'll see in real-world dictionary files:
+
+- `_column(#)` — absolute byte position (1-based; stored 0-based internally)
+- `_skip(#)` and bare `_skip` — per-variable column-pointer modifier (relative to the running cursor; combines with `_column(#)` when both are present)
+- `_newline` — multi-line observations; `_column(#)` references restart at 1 after each
+- `lrecl(#)` and `firstlineoffile(#)` directives
+- All Stata storage types (`byte`, `int`, `long`, `float`, `double`, `str`, `str#`)
+- All read formats (`%w.df`, `%w.dg`, `%w.de`, `%wf`, `%f`, `%ws`, `%s`)
+- Both single-line and multi-line records
+- Both fixed-width and free-format reads
+- The `using FILE` clause and the optional `infile` prefix
+- Comments (`*` lines)
+
+Per-record diagnostics surface as `DctWarning` values on the reader: blank short-line fields treated as system missing, integer values auto-promoted to a wider storage type when they fall in the missing-marker range, declared `using` paths the library doesn't act on, and unrecognized directives.
+
 ## Feature Flags
 
 ### `chrono` — date/time helpers
@@ -138,7 +227,7 @@ Disabled by default. Stata stores dates and timestamps as plain numeric values w
 
 ```toml
 [dependencies]
-dta = { version = "0.4", features = ["chrono"] }
+dta = { version = "0.5", features = ["chrono"] }
 chrono = "0.4"
 ```
 
@@ -189,16 +278,23 @@ Disabled by default. Enable it for async reading and writing with [tokio](https:
 
 ```toml
 [dependencies]
-dta = { version = "0.4", features = ["tokio"] }
+dta = { version = "0.5", features = ["tokio"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
 ```
 
-This unlocks:
+This unlocks async terminals on every options builder:
 
-- `DtaReader::from_tokio_path`, `from_tokio_file`, and `from_tokio_reader`, returning an `AsyncHeaderReader` that mirrors the sync chain with `.await` at each step
-- `DtaWriter::from_tokio_path`, `from_tokio_file`, and `from_tokio_writer`, returning an `AsyncHeaderWriter`
+- **DTA**: `DtaReader::from_tokio_*` returns an `AsyncHeaderReader` that mirrors the sync chain with `.await` at each step; `DtaWriter::from_tokio_*` returns an `AsyncHeaderWriter`. The async writer requires `AsyncWrite + AsyncSeek + Unpin` so that the XML `<map>` and header placeholders can still be patched in place.
+- **DCT**: `DctSource::options().from_tokio_*` returns a `DctSource<R>`; `DctReader::options(schema).from_tokio_*` returns an `AsyncDctReader<R>` whose `read_record` / `read_lazy_record` methods are `.await`ed.
 
-The async writer requires `AsyncWrite + AsyncSeek + Unpin` so that the XML `<map>` and header placeholders can still be patched in place.
+```rust
+let mut reader = DctReader::options(schema).from_tokio_path(path).await?;
+while let Some(record) = reader.read_record().await? {
+    // ...
+}
+```
+
+The sync and async DCT paths share the same pure parsing state — only the I/O loop differs.
 
 ```rust
 use dta::stata::dta::dta_reader::DtaReader;

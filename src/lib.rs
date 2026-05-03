@@ -1,16 +1,27 @@
 #![warn(missing_docs)]
 
-//! A pure Rust reader and writer for Stata's DTA file format.
+//! A pure Rust reader and writer for Stata data formats.
 //!
-//! DTA is the binary format [Stata](https://www.stata.com/) uses to
-//! persist datasets. This crate covers every released version of the
-//! format (104 through 119), including XML-framed releases (117+),
-//! tagged missing values, value-label sets, and long-string (`strL`)
-//! storage.
+//! Two related formats live in this crate:
 //!
-//! The API is built around a typestate chain — you walk through the
-//! sections of a file in order, and each phase hands the underlying
-//! I/O handle to the next. See the [README] for the full tour.
+//! - **DTA** — Stata's binary dataset format ([`stata::dta`]). Every
+//!   released version is supported (104 through 119), including
+//!   XML-framed releases (117+), tagged missing values, value-label
+//!   sets, and long-string (`strL`) storage. The API is built around
+//!   a typestate chain — you walk through the sections of a file in
+//!   order, and each phase hands the underlying I/O handle to the
+//!   next.
+//! - **DCT** — Stata's plain-text dictionary format ([`stata::dct`]).
+//!   Describes the schema of a fixed-width or free-format data file.
+//!   The reader is a two-step builder: parse the dictionary, then
+//!   pair the resulting schema with a data source.
+//!
+//! Format-agnostic Stata-domain types — `MissingValue`,
+//! `StataByte`/`Int`/`Long`/`Float`/`Double`, `StataTimestamp`, the
+//! temporal helpers — live at [`stata`] and are shared between the
+//! two formats.
+//!
+//! See the [README] for the full tour, including DCT examples.
 //!
 //! [README]: https://github.com/almus-the-dan/dta/#readme
 //!
@@ -126,11 +137,53 @@
 //! # demo().unwrap();
 //! ```
 //!
+//! # Reading a DCT dictionary + data file
+//!
+//! ```no_run
+//! use dta::stata::dct::dct_reader::DctReader;
+//! use dta::stata::dct::dct_source::DctSource;
+//! use dta::stata::dct::dct_error::Result;
+//!
+//! # fn demo() -> Result<()> {
+//! let source = DctSource::options().from_path("schema.dct")?;
+//! let mut reader = match source {
+//!     DctSource::External(schema) => {
+//!         DctReader::options(schema).from_path("data.dat")?
+//!     }
+//!     DctSource::Embedded(reader) => reader,
+//! };
+//!
+//! // Capture column names up front: the lending pattern means
+//! // `record` borrows the reader exclusively, so `reader.schema()`
+//! // can't be called inside the loop body.
+//! let column_names: Vec<String> = reader
+//!     .schema()
+//!     .columns()
+//!     .iter()
+//!     .map(|c| c.name().to_string())
+//!     .collect();
+//!
+//! while let Some(record) = reader.read_record()? {
+//!     for (name, value) in column_names.iter().zip(record.values()) {
+//!         println!("{}: {:?}", name, value);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Async
 //!
-//! Enable the `tokio` feature for async reader and writer mirrors —
-//! same typestate chain, `.await` at each step. `DtaReader::from_tokio_*`
-//! / `DtaWriter::from_tokio_*` are the entry points.
+//! Enable the `tokio` feature for async mirrors of every entry point.
+//! Same typestate chain, `.await` at each step:
+//!
+//! - DTA: `DtaReader::from_tokio_*` / `DtaWriter::from_tokio_*`
+//! - DCT: `DctSource::options().from_tokio_*` and
+//!   `DctReader::options(schema).from_tokio_*`
+//!
+//! The async DCT paths share the same pure parsing state with the
+//! sync paths — the only difference is `.await` on `read_line` and
+//! `fill_buf`.
 
 /// Stata file format types and utilities.
 pub mod stata;

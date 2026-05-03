@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0]
+
+### Added
+
+- New top-level module `dta::stata::dct` with a streaming reader for Stata dictionary (`.dct`) files. DCT files describe the schema of fixed-width or free-format plain-text data and are common when importing data into Stata from external systems. The new module sits alongside `dta::stata::dta` and shares the format-agnostic Stata-domain types (`MissingValue`, `StataByte`/`Int`/`Long`/`Float`/`Double`).
+  - `DctSource::options().from_path(p)` / `from_file(f)` / `from_reader(r)` parses a dictionary, returning either `DctSource::External(Schema)` (when the dictionary references an external `.dat`) or `DctSource::Embedded(DctReader<R>)` (when data is inlined after the closing `}`).
+  - `DctReader::options(schema).from_path(p)` / `from_file(f)` / `from_reader(r)` builds a record reader paired with a previously-parsed schema. `read_record()` returns an eager `Record` borrowing string fields from the internal line buffer; `read_lazy_record()` returns a `LazyRecord` that decodes individual columns on demand.
+  - Per-record warnings — `BlankFieldTreatedAsMissing`, `IntegerPromotion`, etc. — are accumulated on the reader and accessible via `DctReader::warnings()`. The buffer is cleared at the start of every `read_record` call so memory stays bounded by the size of one observation rather than the whole file.
+- DCT format support covers: `_column(#)` (1-based, validated and stored 0-based), per-variable `_skip(#)` modifiers, `_newline` for multi-line observations (with `_column` references restarting at 1), `lrecl(#)` and `firstlineoffile(#)` directives, fixed-width and free-format reads (`%w.df`/`%w.dg`/`%w.de`/`%ws`/`%f`/`%s` etc.), implicit-decimal shifts on `%w.df`, blank-as-missing detection, and integer auto-promotion (`Byte → Int → Long → Double`) per Stata's permissive-import behavior.
+- Async variants for both DCT entry points behind the existing `tokio` feature: `DctSourceOptions::from_tokio_path` / `from_tokio_file` / `from_tokio_reader` produce a `DctSource<R>`, and `DctReaderOptions::from_tokio_path` / `from_tokio_file` / `from_tokio_reader` produce an `AsyncDctReader<R>`. The sync and async parsers share a single pure `DctSourceState`, and the sync and async readers share a single pure `DctReaderState` — the only difference between the two paths is `.await` on `read_line` and `fill_buf`.
+
 ### Changed
 
 - **Breaking:** `from_raw` and `to_raw` on `StataByte`, `StataInt`, `StataLong`, `StataFloat`, and `StataDouble` are now crate-private. They were inadvertently exposed in 0.2.0 as public API; the raw u8 / u16 / u32 / f32 / f64 layouts they encode and decode are an internal DTA-format concern, not part of the Stata-domain vocabulary these types are meant to represent. Construct values directly via the `Present(_)` / `Missing(_)` variants, and rely on the reader to handle DTA-side decoding.
