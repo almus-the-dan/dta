@@ -40,20 +40,6 @@ impl<'a> LazyRecord<'a> {
         }
     }
 
-    /// The columns from the schema this record was read against.
-    #[must_use]
-    #[inline]
-    pub fn columns(&self) -> &'a [Column] {
-        self.columns
-    }
-
-    /// 1-based observation number this record corresponds to.
-    #[must_use]
-    #[inline]
-    pub fn observation(&self) -> usize {
-        self.observation
-    }
-
     /// Number of variables (columns) in this record.
     #[must_use]
     #[inline]
@@ -93,8 +79,7 @@ impl<'a> LazyRecord<'a> {
         })?;
         // Warnings for lazy parses are dropped on the floor — see the
         // type-level doc comment.
-        let mut sink = Vec::new();
-        parse_field(line, column, self.observation, &mut sink)
+        parse_field(line, column, self.observation, None)
     }
 }
 
@@ -169,23 +154,5 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 3);
-    }
-
-    #[test]
-    fn lazy_record_observation_number_matches_position() {
-        let input = b"dictionary {\n\
-            _column(1) byte b1 %3.0f\n\
-            }\n\
-            001\n\
-            002\n";
-        let mut reader = parse_with_data(input);
-        {
-            let r1 = reader.read_lazy_record().unwrap().unwrap();
-            assert_eq!(r1.observation(), 1);
-        }
-        {
-            let r2 = reader.read_lazy_record().unwrap().unwrap();
-            assert_eq!(r2.observation(), 2);
-        }
     }
 }

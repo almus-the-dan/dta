@@ -101,7 +101,7 @@ impl<R: BufRead> DctReader<R> {
     ///
     /// # Errors
     ///
-    /// Returns [`DctError`](super::dct_error::DctError) on I/O
+    /// Returns [`DctError`](DctError) on I/O
     /// failure, when the data file ends in the middle of an
     /// observation, or when a field cannot be parsed against the
     /// column's declared type and read format.
@@ -118,7 +118,7 @@ impl<R: BufRead> DctReader<R> {
     ///
     /// The line buffers are loaded eagerly (the I/O has to happen),
     /// but value decoding is deferred until
-    /// [`LazyRecord::value`](super::lazy_record::LazyRecord::value)
+    /// [`LazyRecord::value`](LazyRecord::value)
     /// is called. Use this when you only need a subset of columns
     /// per record and want to skip the parse work for the rest.
     ///
@@ -195,7 +195,12 @@ impl<R: BufRead> DctReader<R> {
         let mut values = Vec::with_capacity(self.schema.columns().len());
         for column in self.schema.columns() {
             let line = &self.line_buffers[column.line_offset()];
-            let value = parse_field(line, column, self.observation_number, &mut self.warnings)?;
+            let value = parse_field(
+                line,
+                column,
+                self.observation_number,
+                Some(&mut self.warnings),
+            )?;
             values.push(value);
         }
 
@@ -208,7 +213,7 @@ pub(super) fn parse_field<'a>(
     line: &'a str,
     column: &Column,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     match column.input_format() {
         InputFormat::FixedNumeric {
@@ -228,7 +233,7 @@ fn parse_fixed_numeric<'a>(
     width: usize,
     decimals: u8,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     let offset = column.offset();
     let end = offset
@@ -241,7 +246,7 @@ fn parse_fixed_numeric<'a>(
     let trimmed = raw_field.trim_ascii();
 
     if trimmed.is_empty() {
-        if truncated {
+        if truncated && let Some(warnings) = warnings {
             let variable = column.name().to_string();
             let warning = DctWarning::BlankFieldTreatedAsMissing {
                 variable,
@@ -273,7 +278,7 @@ fn parse_free_numeric<'a>(
     line: &str,
     column: &Column,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     let token = take_free_token(line, column.offset());
 
@@ -293,7 +298,7 @@ fn parse_fixed_string<'a>(
     column: &Column,
     width: usize,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     let offset = column.offset();
     let end = offset
@@ -308,7 +313,10 @@ fn parse_fixed_string<'a>(
     // them, which we don't want), so trim only the end.
     let trimmed = raw.trim_ascii_end();
 
-    if truncated && trimmed.is_empty() {
+    if truncated
+        && trimmed.is_empty()
+        && let Some(warnings) = warnings
+    {
         let variable = column.name().to_string();
         let warning = DctWarning::BlankFieldTreatedAsMissing {
             variable,
@@ -364,7 +372,7 @@ fn coerce_numeric<'a>(
     value: f64,
     column: &Column,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     if !value.is_finite() {
         return Err(invalid_numeric(column, observation, &value.to_string()));
@@ -388,7 +396,7 @@ fn promote_integer<'a>(
     value: f64,
     column: &Column,
     observation: usize,
-    warnings: &mut Vec<DctWarning>,
+    warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
     let declared = column.storage_type();
     let rounded = value.round();
@@ -396,7 +404,9 @@ fn promote_integer<'a>(
 
     for &candidate in chain {
         if let Some(fitted) = fit_integer(rounded, candidate) {
-            if candidate != declared {
+            if candidate != declared
+                && let Some(warnings) = warnings
+            {
                 let variable = column.name().to_string();
                 let warning = DctWarning::IntegerPromotion {
                     variable,
