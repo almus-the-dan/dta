@@ -31,6 +31,8 @@ pub mod dct_source;
 pub mod dct_warning;
 /// Input format vocabulary derived from the `%infmt` token.
 pub mod input_format;
+/// Observation that decodes its values on demand.
+pub mod lazy_record;
 mod line_ending;
 /// Numeric sub-format (fixed-point, general, scientific) implied by a
 /// fixed-width numeric `%infmt`.
@@ -52,6 +54,7 @@ pub use dct_reader::DctReader;
 pub use dct_source::DctSource;
 pub use dct_warning::DctWarning;
 pub use input_format::InputFormat;
+pub use lazy_record::LazyRecord;
 pub use numeric_style::NumericStyle;
 pub use parser::{open_dct, parse_dct};
 pub use record::Record;

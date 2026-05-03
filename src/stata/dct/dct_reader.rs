@@ -12,6 +12,7 @@ use super::column::Column;
 use super::dct_error::{DctError, Result};
 use super::dct_warning::DctWarning;
 use super::input_format::InputFormat;
+use super::lazy_record::LazyRecord;
 use super::record::Record;
 use super::schema::Schema;
 use super::value::Value;
@@ -105,8 +106,52 @@ impl<R: BufRead> DctReader<R> {
     /// observation, or when a field cannot be parsed against the
     /// column's declared type and read format.
     pub fn read_record(&mut self) -> Result<Option<Record<'_>>> {
-        if self.completed {
+        if !self.advance_to_next_observation()? {
             return Ok(None);
+        }
+
+        let record = self.build_record()?;
+        Ok(Some(record))
+    }
+
+    /// Reads the next observation as a [`LazyRecord`].
+    ///
+    /// The line buffers are loaded eagerly (the I/O has to happen),
+    /// but value decoding is deferred until
+    /// [`LazyRecord::value`](super::lazy_record::LazyRecord::value)
+    /// is called. Use this when you only need a subset of columns
+    /// per record and want to skip the parse work for the rest.
+    ///
+    /// `LazyRecord::value` discards warnings; this method clears the
+    /// reader's warning buffer to keep
+    /// [`warnings`](Self::warnings) reflecting only what the most
+    /// recent eager read produced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DctError`] on I/O failure or when the data file
+    /// ends mid-observation.
+    pub fn read_lazy_record(&mut self) -> Result<Option<LazyRecord<'_>>> {
+        if !self.advance_to_next_observation()? {
+            return Ok(None);
+        }
+
+        let lazy = LazyRecord::new(
+            &self.line_buffers,
+            self.schema.columns(),
+            self.observation_number,
+        );
+        Ok(Some(lazy))
+    }
+
+    /// Shared setup for `read_record` and `read_lazy_record`. Clears
+    /// per-record state, loads the next observation's lines into the
+    /// internal buffers, and bumps `observation_number`. Returns
+    /// `Ok(false)` on a clean end-of-data, `Ok(true)` when an
+    /// observation is staged and ready to be parsed.
+    fn advance_to_next_observation(&mut self) -> Result<bool> {
+        if self.completed {
+            return Ok(false);
         }
 
         self.warnings.clear();
@@ -119,13 +164,11 @@ impl<R: BufRead> DctReader<R> {
         }
 
         if !self.read_lines()? {
-            return Ok(None);
+            return Ok(false);
         }
 
         self.observation_number += 1;
-
-        let record = self.build_record()?;
-        Ok(Some(record))
+        Ok(true)
     }
 
     fn read_lines(&mut self) -> Result<bool> {
@@ -161,7 +204,7 @@ impl<R: BufRead> DctReader<R> {
     }
 }
 
-fn parse_field<'a>(
+pub(super) fn parse_field<'a>(
     line: &'a str,
     column: &Column,
     observation: usize,
