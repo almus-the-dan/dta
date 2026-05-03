@@ -13,15 +13,14 @@
 /// # Examples
 ///
 /// ```
-/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
 /// use dta::stata::stata_long::StataLong;
 ///
-/// let present = StataLong::from_raw(100_000_u32, Release::V117).unwrap();
-/// assert_eq!(present, StataLong::Present(100_000));
+/// let present = StataLong::Present(100_000);
+/// assert_eq!(present.present(), Some(100_000));
 ///
-/// let missing = StataLong::from_raw(0x7FFF_FFE5_u32, Release::V117).unwrap();
-/// assert_eq!(missing, StataLong::Missing(MissingValue::System));
+/// let missing = StataLong::Missing(MissingValue::System);
+/// assert_eq!(missing.present(), None);
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
@@ -64,7 +63,7 @@ impl StataLong {
     /// Returns [`StataError::NotMissingValue`] if the raw value is inside
     /// the DTA 113+ missing range but does not match any of the 27
     /// sentinel values (pre-113 files never produce this error).
-    pub fn from_raw(raw: u32, release: Release) -> Result<Self> {
+    pub(crate) fn from_raw(raw: u32, release: Release) -> Result<Self> {
         let signed = raw.cast_signed();
         if release.supports_tagged_missing() {
             if signed > DTA_113_MAX_INT32 {
@@ -85,7 +84,7 @@ impl StataLong {
     ///
     /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
     /// tagged missing (`.a`–`.z`) and `release` is pre-113.
-    pub fn to_raw(self, release: Release) -> Result<u32> {
+    pub(crate) fn to_raw(self, release: Release) -> Result<u32> {
         match self {
             Self::Present(v) => Ok(v.cast_unsigned()),
             Self::Missing(mv) => {

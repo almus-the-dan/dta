@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `from_raw` and `to_raw` on `StataByte`, `StataInt`, `StataLong`, `StataFloat`, and `StataDouble` are now crate-private. They were inadvertently exposed in 0.2.0 as public API; the raw u8 / u16 / u32 / f32 / f64 layouts they encode and decode are an internal DTA-format concern, not part of the Stata-domain vocabulary these types are meant to represent. Construct values directly via the `Present(_)` / `Missing(_)` variants, and rely on the reader to handle DTA-side decoding.
+
 ## [0.4.0] - 2026-04-25
 
 ### Added

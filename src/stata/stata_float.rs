@@ -11,15 +11,14 @@
 /// # Examples
 ///
 /// ```
-/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
 /// use dta::stata::stata_float::StataFloat;
 ///
-/// let present = StataFloat::from_raw(3.14_f32, Release::V117).unwrap();
-/// assert_eq!(present, StataFloat::Present(3.14));
+/// let present = StataFloat::Present(3.14);
+/// assert_eq!(present.present(), Some(3.14));
 ///
-/// let missing = StataFloat::from_raw(f32::from_bits(0x7F00_0000), Release::V117).unwrap();
-/// assert_eq!(missing, StataFloat::Missing(MissingValue::System));
+/// let missing = StataFloat::Missing(MissingValue::System);
+/// assert_eq!(missing.present(), None);
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
@@ -74,7 +73,7 @@ impl StataFloat {
     /// Returns [`StataError::NotMissingValue`] if a DTA 113+ value's bit
     /// pattern falls in the missing range but does not match any of the
     /// 27 sentinels. Pre-113 decoding never returns this error.
-    pub fn from_raw(raw: f32, release: Release) -> Result<Self> {
+    pub(crate) fn from_raw(raw: f32, release: Release) -> Result<Self> {
         let bits = raw.to_bits();
         let is_positive = bits & 0x8000_0000 == 0;
         if release.supports_tagged_missing() {
@@ -96,7 +95,7 @@ impl StataFloat {
     ///
     /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
     /// tagged missing (`.a`–`.z`) and `release` is pre-113.
-    pub fn to_raw(self, release: Release) -> Result<f32> {
+    pub(crate) fn to_raw(self, release: Release) -> Result<f32> {
         match self {
             Self::Present(v) => Ok(v),
             Self::Missing(mv) => {

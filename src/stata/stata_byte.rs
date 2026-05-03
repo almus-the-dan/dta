@@ -12,15 +12,14 @@
 /// # Examples
 ///
 /// ```
-/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
 /// use dta::stata::stata_byte::StataByte;
 ///
-/// let present = StataByte::from_raw(42_u8, Release::V117).unwrap();
-/// assert_eq!(present, StataByte::Present(42));
+/// let present = StataByte::Present(42);
+/// assert_eq!(present.present(), Some(42));
 ///
-/// let missing = StataByte::from_raw(0x65_u8, Release::V117).unwrap();
-/// assert_eq!(missing, StataByte::Missing(MissingValue::System));
+/// let missing = StataByte::Missing(MissingValue::System);
+/// assert_eq!(missing.present(), None);
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
@@ -63,7 +62,7 @@ impl StataByte {
     /// the DTA 113+ missing range but does not match any of the 27
     /// sentinel values. This can only happen for `release >= V113` —
     /// the pre-113 decoder treats every byte as valid.
-    pub fn from_raw(raw: u8, release: Release) -> Result<Self> {
+    pub(crate) fn from_raw(raw: u8, release: Release) -> Result<Self> {
         let signed = raw.cast_signed();
         if release.supports_tagged_missing() {
             if signed > DTA_113_MAX_INT8 {
@@ -85,7 +84,7 @@ impl StataByte {
     /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
     /// tagged missing (`.a`–`.z`) and `release` is pre-113. Pre-113
     /// formats have no way to encode tagged missing values.
-    pub fn to_raw(self, release: Release) -> Result<u8> {
+    pub(crate) fn to_raw(self, release: Release) -> Result<u8> {
         match self {
             Self::Present(v) => Ok(v.cast_unsigned()),
             Self::Missing(mv) => {
