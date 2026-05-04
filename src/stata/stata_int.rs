@@ -12,15 +12,14 @@
 /// # Examples
 ///
 /// ```
-/// use dta::stata::dta::release::Release;
 /// use dta::stata::missing_value::MissingValue;
 /// use dta::stata::stata_int::StataInt;
 ///
-/// let present = StataInt::from_raw(1000_u16, Release::V117).unwrap();
-/// assert_eq!(present, StataInt::Present(1000));
+/// let present = StataInt::Present(1000);
+/// assert_eq!(present.present(), Some(1000));
 ///
-/// let missing = StataInt::from_raw(0x7FE5_u16, Release::V117).unwrap();
-/// assert_eq!(missing, StataInt::Missing(MissingValue::System));
+/// let missing = StataInt::Missing(MissingValue::System);
+/// assert_eq!(missing.present(), None);
 /// ```
 use super::dta::release::Release;
 use super::missing_value::MissingValue;
@@ -29,7 +28,7 @@ use super::stata_error::{Result, StataError};
 use super::stata_long::StataLong;
 
 /// Maximum valid (non-missing) Stata int value for DTA 113+.
-const DTA_113_MAX_INT16: i16 = 32_740;
+pub(crate) const DTA_113_MAX_INT16: i16 = 32_740;
 
 /// Raw u16 value encoding system missing (`.`) in DTA 113+.
 const MISSING_INT_SYSTEM_113: u16 = 0x7FE5;
@@ -62,7 +61,7 @@ impl StataInt {
     /// Returns [`StataError::NotMissingValue`] if the raw value is inside
     /// the DTA 113+ missing range but does not match any of the 27
     /// sentinel values (pre-113 files never produce this error).
-    pub fn from_raw(raw: u16, release: Release) -> Result<Self> {
+    pub(crate) fn from_raw(raw: u16, release: Release) -> Result<Self> {
         let signed = raw.cast_signed();
         if release.supports_tagged_missing() {
             if signed > DTA_113_MAX_INT16 {
@@ -83,7 +82,7 @@ impl StataInt {
     ///
     /// Returns [`StataError::TaggedMissingUnsupported`] if `self` is a
     /// tagged missing (`.a`–`.z`) and `release` is pre-113.
-    pub fn to_raw(self, release: Release) -> Result<u16> {
+    pub(crate) fn to_raw(self, release: Release) -> Result<u16> {
         match self {
             Self::Present(v) => Ok(v.cast_unsigned()),
             Self::Missing(mv) => {
