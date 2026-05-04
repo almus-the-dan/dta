@@ -9,7 +9,7 @@ use dta::stata::dct::value::Value;
 #[test]
 #[ignore = "Reads local fixture files"]
 fn read_medical_external() {
-    let directory = Path::new("/mnt/c/Publish/medical-external");
+    let directory = Path::new("/mnt/c/Publish/dct/medical-external");
     let dictionary_path = directory.join("medical.dct");
     let data_path = directory.join("medical.data");
 
@@ -36,7 +36,7 @@ fn read_medical_external() {
 #[test]
 #[ignore = "Reads local fixture files"]
 fn read_medical_embedded() {
-    let dictionary_path = Path::new("/mnt/c/Publish/medical-embedded/medical.dct");
+    let dictionary_path = Path::new("/mnt/c/Publish/dct/medical-embedded/medical.dct");
 
     let source = DctSource::options()
         .from_path(dictionary_path)

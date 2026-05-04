@@ -219,6 +219,8 @@ The DCT parser supports the directives you'll see in real-world dictionary files
 
 Per-record diagnostics surface as `DctWarning` values on the reader: blank short-line fields treated as system missing, integer values auto-promoted to a wider storage type when they fall in the missing-marker range, declared `using` paths the library doesn't act on, and unrecognized directives.
 
+A note on real-world coverage: the rarer directives (`lrecl(#)`, `firstlineoffile(#)`, `_newline`, free-format reads) are implemented against Stata's documentation but I haven't found a `.dct` file in the wild that uses them — every public dictionary I sampled had been cleaned up to the common subset. If you hit a bug with one of these, please file an issue with a small representative `.dct` file and the matching data file so I can reproduce.
+
 ## Feature Flags
 
 ### `chrono` — date/time helpers

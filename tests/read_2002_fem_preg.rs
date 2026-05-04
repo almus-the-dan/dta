@@ -6,7 +6,7 @@ use dta::stata::dct::dct_source::DctSource;
 #[test]
 #[ignore = "Using local files that require a license"]
 fn read_2002_fem_preg_schema_and_records() {
-    let directory = Path::new("/mnt/c/Publish/2002FemPreg");
+    let directory = Path::new("/mnt/c/Publish/dct/2002FemPreg");
     let dictionary_path = directory.join("2002FemPreg.dct");
     let data_path = directory.join("2002FemPreg.dat");
 
