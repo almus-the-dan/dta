@@ -48,6 +48,7 @@ async fn has_more_data<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<bool> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stata::dct::column_anchor::ColumnAnchor;
     use crate::stata::dct::dct_warning::DctWarning;
     use crate::stata::dct::input_format::InputFormat;
     use crate::stata::dct::variable_type::VariableType;
@@ -62,7 +63,7 @@ mod tests {
         let schema = src.schema();
         assert_eq!(schema.columns().len(), 1);
         assert_eq!(schema.columns()[0].name(), "myvar");
-        assert_eq!(schema.columns()[0].offset(), 0);
+        assert_eq!(schema.columns()[0].anchor(), ColumnAnchor::Absolute(0));
         assert_eq!(schema.columns()[0].storage_type(), VariableType::Float);
         assert!(matches!(
             schema.columns()[0].input_format(),

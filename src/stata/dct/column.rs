@@ -1,3 +1,4 @@
+use super::column_anchor::ColumnAnchor;
 use super::input_format::InputFormat;
 use super::variable_type::VariableType;
 
@@ -5,7 +6,7 @@ use super::variable_type::VariableType;
 #[derive(Debug, Clone)]
 pub struct Column {
     line_offset: usize,
-    offset: usize,
+    anchor: ColumnAnchor,
     storage_type: VariableType,
     name: String,
     read_format: InputFormat,
@@ -17,7 +18,7 @@ impl Column {
     #[must_use]
     pub(crate) fn new(
         line_offset: usize,
-        offset: usize,
+        anchor: ColumnAnchor,
         storage_type: VariableType,
         name: String,
         read_format: InputFormat,
@@ -25,7 +26,7 @@ impl Column {
     ) -> Self {
         Self {
             line_offset,
-            offset,
+            anchor,
             storage_type,
             name,
             read_format,
@@ -47,19 +48,24 @@ impl Column {
         self.line_offset
     }
 
-    /// 0-based byte offset within this column's physical line at
-    /// which the variable's field begins.
+    /// Where this column's first byte sits within its physical line.
     ///
-    /// Derived from the `_column(#)` directive in the dictionary,
-    /// which is 1-based; the parser subtracts one and validates that
-    /// the declared value was at least 1. After a `_newline` the
-    /// `_column(#)` reference restarts from 1, so this offset is
-    /// relative to [`line_offset`](Self::line_offset), not cumulative
-    /// across the observation.
+    /// Returns [`ColumnAnchor::Absolute`] for columns whose start
+    /// position is statically resolvable from the dictionary alone
+    /// (the common case — every fixed-width column, plus any column
+    /// with an explicit `_column(#)`).
+    ///
+    /// Returns [`ColumnAnchor::RelativeToCursor`] when a free-format
+    /// predecessor (`%f`, `%g`, `%e`, `%s` with no width) sits
+    /// between this column and the most recent absolute anchor on the
+    /// same line. Free-format reads consume input dynamically, so
+    /// the start position has to be resolved at runtime against the
+    /// actual line bytes. The DCT reader handles this transparently
+    /// inside `read_record` / `read_lazy_record`.
     #[must_use]
     #[inline]
-    pub fn offset(&self) -> usize {
-        self.offset
+    pub fn anchor(&self) -> ColumnAnchor {
+        self.anchor
     }
 
     /// The variable's declared storage type.

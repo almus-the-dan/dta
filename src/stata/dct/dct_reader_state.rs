@@ -15,7 +15,10 @@ use crate::stata::stata_float::StataFloat;
 use crate::stata::stata_int::{DTA_113_MAX_INT16, StataInt};
 use crate::stata::stata_long::{DTA_113_MAX_INT32, StataLong};
 
+use std::cell::RefCell;
+
 use super::column::Column;
+use super::column_anchor::ColumnAnchor;
 use super::dct_error::{DctError, Result};
 use super::dct_warning::DctWarning;
 use super::input_format::InputFormat;
@@ -25,6 +28,15 @@ use super::record::Record;
 use super::schema::Schema;
 use super::value::Value;
 use super::variable_type::VariableType;
+
+/// Per-column cache of resolved runtime offsets, used by
+/// [`LazyRecord`] for columns whose anchor is
+/// [`ColumnAnchor::RelativeToCursor`].
+///
+/// Lives on [`DctReaderState`] so the allocation persists across
+/// observations; `LazyRecord<'_>` borrows it for the lifetime of the
+/// current observation.
+pub(super) type RelativeOffsetCache = RefCell<Vec<Option<usize>>>;
 
 /// Result of an attempted line read for the current observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +65,18 @@ pub(super) struct DctReaderState {
     observation_number: usize,
     completed: bool,
     warnings: Vec<DctWarning>,
+    /// Per-line runtime cursor scratch buffer used by
+    /// [`build_record`](Self::build_record). Lives on the state so
+    /// the allocation is reused across observations.
+    runtime_cursors: Vec<usize>,
+    /// Per-column runtime offset cache used by
+    /// [`LazyRecord`](LazyRecord) for columns with
+    /// [`ColumnAnchor::RelativeToCursor`]. Lives on the state and is
+    /// borrowed by `LazyRecord<'_>`. Reset (in place) at the start of
+    /// each lazy-record build so the allocation is reused across
+    /// observations. Wrapped in `RefCell` so `LazyRecord::value`
+    /// can populate the cache through `&self`.
+    relative_offset_cache: RelativeOffsetCache,
 }
 
 impl DctReaderState {
@@ -64,6 +88,8 @@ impl DctReaderState {
             observation_number: 0,
             completed: false,
             warnings: Vec::new(),
+            runtime_cursors: Vec::new(),
+            relative_offset_cache: RefCell::new(Vec::new()),
         }
     }
 
@@ -134,34 +160,190 @@ impl DctReaderState {
     }
 
     /// Builds an eager [`Record`] from the current line buffers.
+    ///
+    /// Walks columns in declaration order, maintaining a per-line
+    /// runtime cursor so free-format reads chain correctly. The
+    /// cursor scratch buffer is reused across calls — only resized
+    /// (and only on the first call) when `lines_per_observation`
+    /// changes.
     pub(super) fn build_record(&mut self) -> Result<Record<'_>> {
         let schema = &self.schema;
         let line_buffers = &self.line_buffers;
         let observation_number = self.observation_number;
         let warnings = &mut self.warnings;
+        let runtime_cursors = &mut self.runtime_cursors;
+
+        let lines_per_observation = schema.lines_per_observation();
+        runtime_cursors.clear();
+        runtime_cursors.resize(lines_per_observation, 0);
 
         let mut values = Vec::with_capacity(schema.columns().len());
         for column in schema.columns() {
-            let line = &line_buffers[column.line_offset()];
-            let value = parse_field(line, column, observation_number, Some(warnings))?;
+            let line_index = column.line_offset();
+            let line = &line_buffers[line_index];
+            let cursor = runtime_cursors[line_index];
+
+            let start = resolve_column_start(column, cursor, observation_number)?;
+
+            let value = parse_field(line, start, column, observation_number, Some(warnings))?;
             values.push(value);
+
+            runtime_cursors[line_index] = simulate_read_advance(line, start, column.input_format());
         }
 
         Ok(Record::new(values))
     }
 
-    /// Builds a [`LazyRecord`] borrowing from the current line buffers.
+    /// Builds a [`LazyRecord`] borrowing from the current line
+    /// buffers and from the state's relative-offset cache.
+    ///
+    /// The cache is reset (in place) so the allocation persists
+    /// across calls; the `LazyRecord` populates it lazily as
+    /// `value(i)` is invoked on relative-anchor columns.
     pub(super) fn build_lazy_record(&self) -> LazyRecord<'_> {
+        let column_count = self.schema.columns().len();
+        {
+            let mut cache = self.relative_offset_cache.borrow_mut();
+            cache.clear();
+            cache.resize(column_count, None);
+        }
         LazyRecord::new(
             &self.line_buffers,
             self.schema.columns(),
             self.observation_number,
+            &self.relative_offset_cache,
         )
+    }
+}
+
+/// Re-derives the runtime byte offset of `column_index` on its
+/// physical line. Used by [`LazyRecord::value`] when a column's
+/// anchor is [`ColumnAnchor::RelativeToCursor`].
+///
+/// Walks back to the most recent absolute anchor on the same line
+/// (or to byte 0 if there is none), then forward through every
+/// intermediate column, simulating each read against the actual
+/// line bytes.
+pub(super) fn resolve_runtime_offset(
+    line: &str,
+    columns: &[Column],
+    column_index: usize,
+    observation: usize,
+) -> Result<usize> {
+    let target_line = columns[column_index].line_offset();
+
+    // Find the most recent absolute anchor on the same line at index
+    // ≤ column_index. Walking starts at that point with the anchor's
+    // offset; otherwise walks from byte 0.
+    let (walk_start, mut cursor) =
+        find_nearest_absolute_anchor(&columns, column_index, target_line);
+
+    // Simulate every read from walk_start up to (but not including)
+    // column_index, advancing cursor.
+    let columns_slice = &columns[walk_start..column_index];
+    cursor = simulate_reading(line, columns_slice, observation, target_line, cursor)?;
+
+    resolve_column_start(&columns[column_index], cursor, observation)
+}
+
+fn find_nearest_absolute_anchor(
+    columns: &&[Column],
+    column_index: usize,
+    target_line: usize,
+) -> (usize, usize) {
+    let mut walk_start = 0usize;
+    let mut cursor = 0usize;
+    for index in (0..column_index).rev() {
+        let prev = &columns[index];
+        if prev.line_offset() != target_line {
+            continue;
+        }
+        if let ColumnAnchor::Absolute(offset) = prev.anchor() {
+            walk_start = index;
+            cursor = offset;
+            break;
+        }
+    }
+    (walk_start, cursor)
+}
+
+fn simulate_reading(
+    line: &str,
+    columns: &[Column],
+    observation: usize,
+    target_line: usize,
+    cursor: usize,
+) -> Result<usize> {
+    let mut cursor = cursor;
+    for column in columns {
+        if column.line_offset() != target_line {
+            continue;
+        }
+        let start = resolve_column_start(column, cursor, observation)?;
+        cursor = simulate_read_advance(line, start, column.input_format());
+    }
+    Ok(cursor)
+}
+
+/// Resolves the byte offset where `column`'s field starts. For
+/// [`ColumnAnchor::Absolute`] this is the static offset; for
+/// [`ColumnAnchor::RelativeToCursor`] it is `cursor + skip`, with
+/// overflow surfaced as [`DctError::RecordOffsetOverflow`].
+fn resolve_column_start(column: &Column, cursor: usize, observation: usize) -> Result<usize> {
+    match column.anchor() {
+        ColumnAnchor::Absolute(offset) => Ok(offset),
+        ColumnAnchor::RelativeToCursor { skip } => cursor
+            .checked_add(skip)
+            .ok_or_else(|| record_offset_overflow(column, observation)),
+    }
+}
+
+/// Simulates a single field read against `line`, returning the
+/// position the cursor lands at after the read.
+///
+/// For fixed-width formats this is `start + width` (saturated to
+/// `line.len()` so the cursor never points past end-of-line). For
+/// free-format reads, mirrors what `parse_free_numeric` /
+/// `parse_free_string` do at parse time: skip leading whitespace,
+/// take the next token (or quoted run for strings), return the
+/// position after the token.
+fn simulate_read_advance(line: &str, start: usize, input_format: InputFormat) -> usize {
+    let line_len = line.len();
+    let from = start.min(line_len);
+    match input_format {
+        InputFormat::FixedNumeric { width, .. } | InputFormat::FixedString { width } => {
+            from.saturating_add(width).min(line_len)
+        }
+        InputFormat::FreeNumeric => {
+            let after = line[from..].trim_ascii_start();
+            let leading = (line_len - from) - after.len();
+            let token_end = after
+                .find(|c: char| c.is_ascii_whitespace())
+                .unwrap_or(after.len());
+            from + leading + token_end
+        }
+        InputFormat::FreeString => {
+            let after = line[from..].trim_ascii_start();
+            let leading = (line_len - from) - after.len();
+            if let Some(body) = after.strip_prefix('"') {
+                let close = body.find('"').unwrap_or(body.len());
+                // 1 byte for opening quote, body bytes, plus 1 byte
+                // for the closing quote if present.
+                let closing = usize::from(close < body.len());
+                from + leading + 1 + close + closing
+            } else {
+                let token_end = after
+                    .find(|c: char| c.is_ascii_whitespace())
+                    .unwrap_or(after.len());
+                from + leading + token_end
+            }
+        }
     }
 }
 
 pub(super) fn parse_field<'a>(
     line: &'a str,
+    runtime_offset: usize,
     column: &Column,
     observation: usize,
     warnings: Option<&mut Vec<DctWarning>>,
@@ -169,24 +351,34 @@ pub(super) fn parse_field<'a>(
     match column.input_format() {
         InputFormat::FixedNumeric {
             width, decimals, ..
-        } => parse_fixed_numeric(line, column, width, decimals, observation, warnings),
+        } => parse_fixed_numeric(
+            line,
+            runtime_offset,
+            column,
+            width,
+            decimals,
+            observation,
+            warnings,
+        ),
         InputFormat::FixedString { width } => {
-            parse_fixed_string(line, column, width, observation, warnings)
+            parse_fixed_string(line, runtime_offset, column, width, observation, warnings)
         }
-        InputFormat::FreeNumeric => parse_free_numeric(line, column, observation, warnings),
-        InputFormat::FreeString => Ok(parse_free_string(line, column.offset())),
+        InputFormat::FreeNumeric => {
+            parse_free_numeric(line, runtime_offset, column, observation, warnings)
+        }
+        InputFormat::FreeString => Ok(parse_free_string(line, runtime_offset)),
     }
 }
 
 fn parse_fixed_numeric<'a>(
     line: &str,
+    offset: usize,
     column: &Column,
     width: usize,
     decimals: u8,
     observation: usize,
     warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
-    let offset = column.offset();
     let end = offset
         .checked_add(width)
         .ok_or_else(|| record_offset_overflow(column, observation))?;
@@ -227,11 +419,12 @@ fn parse_fixed_numeric<'a>(
 
 fn parse_free_numeric<'a>(
     line: &str,
+    offset: usize,
     column: &Column,
     observation: usize,
     warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
-    let token = take_free_token(line, column.offset());
+    let token = take_free_token(line, offset);
 
     if token.is_empty() || token == "." {
         let value = missing_value_for(column.storage_type());
@@ -246,12 +439,12 @@ fn parse_free_numeric<'a>(
 
 fn parse_fixed_string<'a>(
     line: &'a str,
+    offset: usize,
     column: &Column,
     width: usize,
     observation: usize,
     warnings: Option<&mut Vec<DctWarning>>,
 ) -> Result<Value<'a>> {
-    let offset = column.offset();
     let end = offset
         .checked_add(width)
         .ok_or_else(|| record_offset_overflow(column, observation))?;

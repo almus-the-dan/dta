@@ -27,6 +27,9 @@ pub mod async_dct_reader;
 mod async_parser;
 /// Per-variable column declaration parsed from the dictionary.
 pub mod column;
+/// Where a column's first byte sits within its physical line —
+/// statically known or runtime-resolved.
+pub mod column_anchor;
 /// Error type for DCT parsing and reading.
 pub mod dct_error;
 /// Data-row reader paired with a parsed schema.
@@ -62,6 +65,7 @@ pub mod variable_type;
 #[cfg(feature = "tokio")]
 pub use async_dct_reader::AsyncDctReader;
 pub use column::Column;
+pub use column_anchor::ColumnAnchor;
 pub use dct_error::{DctError, Result};
 pub use dct_reader::DctReader;
 pub use dct_reader_options::DctReaderOptions;

@@ -52,6 +52,7 @@ fn has_more_data<R: BufRead>(reader: &mut R) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stata::dct::column_anchor::ColumnAnchor;
     use crate::stata::dct::dct_warning::DctWarning;
     use crate::stata::dct::input_format::InputFormat;
     use crate::stata::dct::numeric_style::NumericStyle;
@@ -68,7 +69,7 @@ mod tests {
         let schema = src.schema();
         assert_eq!(schema.columns().len(), 1);
         assert_eq!(schema.columns()[0].name(), "myvar");
-        assert_eq!(schema.columns()[0].offset(), 0);
+        assert_eq!(schema.columns()[0].anchor(), ColumnAnchor::Absolute(0));
         assert_eq!(schema.columns()[0].storage_type(), VariableType::Float);
         assert!(matches!(
             schema.columns()[0].input_format(),
@@ -209,9 +210,9 @@ mod tests {
         let src = parse(dict).unwrap();
         let cols = src.schema().columns();
         assert_eq!(cols.len(), 2);
-        assert_eq!(cols[0].offset(), 0);
+        assert_eq!(cols[0].anchor(), ColumnAnchor::Absolute(0));
         // b1 finishes at byte 3 (0 + width 3); _skip(2) → 5.
-        assert_eq!(cols[1].offset(), 5);
+        assert_eq!(cols[1].anchor(), ColumnAnchor::Absolute(5));
     }
 
     #[test]
@@ -223,7 +224,7 @@ mod tests {
         let src = parse(dict).unwrap();
         let cols = src.schema().columns();
         // _column(10) → 0-based 9, then _skip(3) → 12.
-        assert_eq!(cols[0].offset(), 12);
+        assert_eq!(cols[0].anchor(), ColumnAnchor::Absolute(12));
     }
 
     #[test]
@@ -235,7 +236,7 @@ mod tests {
         let src = parse(dict).unwrap();
         let cols = src.schema().columns();
         // b1 ends at 3; bare _skip → 4.
-        assert_eq!(cols[1].offset(), 4);
+        assert_eq!(cols[1].anchor(), ColumnAnchor::Absolute(4));
     }
 
     #[test]
@@ -250,9 +251,9 @@ mod tests {
         let src = parse(dict).unwrap();
         let cols = src.schema().columns();
         assert_eq!(cols.len(), 3);
-        assert_eq!(cols[0].offset(), 0);
-        assert_eq!(cols[1].offset(), 3);
-        assert_eq!(cols[2].offset(), 6);
+        assert_eq!(cols[0].anchor(), ColumnAnchor::Absolute(0));
+        assert_eq!(cols[1].anchor(), ColumnAnchor::Absolute(3));
+        assert_eq!(cols[2].anchor(), ColumnAnchor::Absolute(6));
     }
 
     #[test]
@@ -266,14 +267,14 @@ mod tests {
         let src = parse(dict).unwrap();
         let cols = src.schema().columns();
         assert_eq!(cols[0].line_offset(), 0);
-        assert_eq!(cols[0].offset(), 0);
+        assert_eq!(cols[0].anchor(), ColumnAnchor::Absolute(0));
         // b1 ends at 3, _skip(5) → 8.
         assert_eq!(cols[1].line_offset(), 0);
-        assert_eq!(cols[1].offset(), 8);
+        assert_eq!(cols[1].anchor(), ColumnAnchor::Absolute(8));
         // _newline resets cursor to 0 on a new physical line, then
         // _skip(2) → 2.
         assert_eq!(cols[2].line_offset(), 1);
-        assert_eq!(cols[2].offset(), 2);
+        assert_eq!(cols[2].anchor(), ColumnAnchor::Absolute(2));
     }
 
     #[test]
@@ -347,11 +348,11 @@ mod tests {
         let cols = schema.columns();
         assert_eq!(cols.len(), 3);
         assert_eq!(cols[0].line_offset(), 0);
-        assert_eq!(cols[0].offset(), 0);
+        assert_eq!(cols[0].anchor(), ColumnAnchor::Absolute(0));
         assert_eq!(cols[1].line_offset(), 1);
-        assert_eq!(cols[1].offset(), 0);
+        assert_eq!(cols[1].anchor(), ColumnAnchor::Absolute(0));
         assert_eq!(cols[2].line_offset(), 1);
-        assert_eq!(cols[2].offset(), 4);
+        assert_eq!(cols[2].anchor(), ColumnAnchor::Absolute(4));
     }
 
     #[test]

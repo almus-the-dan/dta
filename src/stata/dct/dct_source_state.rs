@@ -16,6 +16,7 @@ use std::iter::Peekable;
 use std::ops::Range;
 
 use super::column::Column;
+use super::column_anchor::ColumnAnchor;
 use super::dct_error::{DctError, Result};
 use super::dct_warning::DctWarning;
 use super::input_format::InputFormat;
@@ -50,6 +51,13 @@ pub(super) struct DctSourceState {
     header_tokens: Vec<String>,
     body_data: BodyData,
     cursor_offset: usize,
+    /// Whether `cursor_offset` is statically meaningful. Becomes
+    /// `false` after a free-format read on the current physical
+    /// line; resets to `true` on `_newline` or an explicit
+    /// `_column(#)`. Drives the choice between
+    /// [`ColumnAnchor::Absolute`] and
+    /// [`ColumnAnchor::RelativeToCursor`].
+    cursor_is_static: bool,
     scratch_ranges: Vec<Range<usize>>,
     declared_data_path: Option<String>,
 }
@@ -70,6 +78,7 @@ impl DctSourceState {
                 warnings: Vec::new(),
             },
             cursor_offset: 0,
+            cursor_is_static: true,
             scratch_ranges: Vec::new(),
             declared_data_path: None,
         }
@@ -200,6 +209,7 @@ impl DctSourceState {
             line_number,
             &mut self.body_data,
             &mut self.cursor_offset,
+            &mut self.cursor_is_static,
         )? {
             return Ok(FeedOutcome::NeedMore);
         }
@@ -211,6 +221,7 @@ impl DctSourceState {
                 line_number,
                 self.body_data.lines_per_observation,
                 &mut self.cursor_offset,
+                &mut self.cursor_is_static,
             )?;
             self.body_data.columns.push(column);
             return Ok(FeedOutcome::NeedMore);
@@ -310,6 +321,7 @@ fn process_directive(
     line_number: usize,
     data: &mut BodyData,
     cursor_offset: &mut usize,
+    cursor_is_static: &mut bool,
 ) -> Result<bool> {
     let Some(directive) = parse_directive(first) else {
         return Ok(false);
@@ -340,8 +352,10 @@ fn process_directive(
             // Per the spec: "after `_newline`, `_column`
             // references restart from 1." The same applies
             // implicitly to `_skip`, which is relative to the
-            // current pointer.
+            // current pointer. Also resets the cursor to a
+            // statically known position.
             *cursor_offset = 0;
+            *cursor_is_static = true;
         }
     }
     Ok(true)
@@ -395,6 +409,7 @@ fn parse_variable_line(
     line_number: usize,
     line_offset: usize,
     cursor_offset: &mut usize,
+    cursor_is_static: &mut bool,
 ) -> Result<Column> {
     let invalid = || DctError::InvalidColumnDirective {
         line: line_number,
@@ -410,10 +425,12 @@ fn parse_variable_line(
     // optional `_skip(#)` then advances relatively. Either, both, or
     // neither may appear — neither means "start at the running
     // column pointer".
-    let offset =
-        compute_variable_offset(&mut iterator, *cursor_offset).map_err(|fault| match fault {
-            OffsetFault::Invalid => invalid(),
-            OffsetFault::Overflow => overflow(),
+    let anchor =
+        compute_anchor(&mut iterator, *cursor_offset, *cursor_is_static).map_err(|fault| {
+            match fault {
+                OffsetFault::Invalid => invalid(),
+                OffsetFault::Overflow => overflow(),
+            }
         })?;
     // Optional storage type. Spec default is `float`.
     let (storage_type, storage_str_width) =
@@ -436,29 +453,40 @@ fn parse_variable_line(
         storage_str_width,
     ));
 
-    *cursor_offset = advance_cursor(offset, input_format).ok_or_else(overflow)?;
+    advance_parser_cursor(
+        anchor,
+        input_format,
+        cursor_offset,
+        cursor_is_static,
+        overflow,
+    )?;
 
-    let column = Column::new(line_offset, offset, storage_type, name, input_format, label);
+    let column = Column::new(line_offset, anchor, storage_type, name, input_format, label);
     Ok(column)
 }
 
-/// Failure mode for [`compute_variable_offset`]. Distinguishes a
-/// malformed `_column(#)` directive (e.g., non-numeric or zero) from
-/// an arithmetic overflow when combining `_column(#)` and `_skip(#)`.
+/// Failure mode for [`compute_anchor`]. Distinguishes a malformed
+/// `_column(#)` directive (e.g., non-numeric or zero) from an
+/// arithmetic overflow when combining `_column(#)` and `_skip(#)`.
 enum OffsetFault {
     Invalid,
     Overflow,
 }
 
-/// Resolves the variable's starting byte offset. Consumes a leading
-/// `_column(#)` token if present (absolute), then a leading
-/// `_skip(#)` token if present (relative). When neither appears, the
-/// offset is the running cursor.
-fn compute_variable_offset<'a, I: Iterator<Item = &'a str>>(
+/// Resolves the variable's anchor. Consumes a leading `_column(#)`
+/// token if present (absolute base), then a leading `_skip(#)` /
+/// `_skip` token if present (relative skip). The choice between
+/// [`ColumnAnchor::Absolute`] and [`ColumnAnchor::RelativeToCursor`]
+/// depends on whether the running parser cursor is statically known
+/// at this point — an explicit `_column(#)` always produces an
+/// absolute anchor, but a missing `_column(#)` after a free-format
+/// predecessor must be runtime-resolved.
+fn compute_anchor<'a, I: Iterator<Item = &'a str>>(
     iterator: &mut Peekable<I>,
     cursor_offset: usize,
-) -> std::result::Result<usize, OffsetFault> {
-    let mut offset = cursor_offset;
+    cursor_is_static: bool,
+) -> std::result::Result<ColumnAnchor, OffsetFault> {
+    let mut explicit_column: Option<usize> = None;
     if let Some(&token) = iterator.peek()
         && token.starts_with("_column(")
     {
@@ -467,32 +495,70 @@ fn compute_variable_offset<'a, I: Iterator<Item = &'a str>>(
         if one_based < 1 {
             return Err(OffsetFault::Invalid);
         }
-        offset = one_based - 1;
+        explicit_column = Some(one_based - 1);
     }
+    let mut skip = 0usize;
     if let Some(&token) = iterator.peek()
-        && let Some(skip) = parse_skip_modifier(token)
+        && let Some(s) = parse_skip_modifier(token)
     {
         iterator.next();
-        offset = offset.checked_add(skip).ok_or(OffsetFault::Overflow)?;
+        skip = s;
     }
-    Ok(offset)
+
+    let anchor = match (explicit_column, cursor_is_static) {
+        (Some(base), _) => {
+            let resolved = base.checked_add(skip).ok_or(OffsetFault::Overflow)?;
+            ColumnAnchor::Absolute(resolved)
+        }
+        (None, true) => {
+            let resolved = cursor_offset
+                .checked_add(skip)
+                .ok_or(OffsetFault::Overflow)?;
+            ColumnAnchor::Absolute(resolved)
+        }
+        (None, false) => ColumnAnchor::RelativeToCursor { skip },
+    };
+
+    Ok(anchor)
 }
 
-/// Returns the column pointer's position after a variable using
-/// `input_format` is read from `offset`. Fixed-width formats consume
-/// exactly `width` bytes; free-format reads consume input dynamically
-/// at runtime, so the parser-time cursor stays where the variable
-/// started. Downstream variables that need to follow a free-format
-/// read should anchor explicitly with `_column(#)`.
+/// Updates the parser-time cursor and its static-ness flag after a
+/// variable was consumed.
 ///
-/// Returns `None` when the offset+width sum overflows `usize`.
-fn advance_cursor(offset: usize, input_format: InputFormat) -> Option<usize> {
-    match input_format {
-        InputFormat::FixedNumeric { width, .. } | InputFormat::FixedString { width } => {
-            offset.checked_add(width)
+/// - **Fixed-width** reads advance the cursor by `width`; the static
+///   flag is preserved (because `width` is known statically — but if
+///   the anchor itself was non-static, the flag was already false).
+/// - **Free-format** reads make the cursor non-static for any
+///   subsequent column on the same physical line that doesn't
+///   re-anchor with `_column(#)`.
+///
+/// Returns the supplied `overflow` error if the new fixed-width
+/// cursor would exceed `usize::MAX`.
+fn advance_parser_cursor(
+    anchor: ColumnAnchor,
+    input_format: InputFormat,
+    cursor_offset: &mut usize,
+    cursor_is_static: &mut bool,
+    overflow: impl FnOnce() -> DctError,
+) -> Result<()> {
+    match (anchor, input_format) {
+        (
+            ColumnAnchor::Absolute(start),
+            InputFormat::FixedNumeric { width, .. } | InputFormat::FixedString { width },
+        ) => {
+            *cursor_offset = start.checked_add(width).ok_or_else(overflow)?;
+            *cursor_is_static = true;
         }
-        InputFormat::FreeNumeric | InputFormat::FreeString => Some(offset),
+        (ColumnAnchor::Absolute(start), InputFormat::FreeNumeric | InputFormat::FreeString) => {
+            *cursor_offset = start;
+            *cursor_is_static = false;
+        }
+        (ColumnAnchor::RelativeToCursor { .. }, _) => {
+            // Cursor was already non-static; stays that way.
+            *cursor_is_static = false;
+        }
     }
+    Ok(())
 }
 
 fn try_parse_storage_type_width<'a, I: Iterator<Item = &'a str>>(
