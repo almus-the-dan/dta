@@ -54,7 +54,7 @@ impl<W> AsyncHeaderWriter<W> {
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {
     /// Writes the file header and transitions to schema writing.
     ///
-    /// For binary formats (104–116) this emits the fixed 10-byte
+    /// For binary formats (102–116) this emits the fixed 10-byte
     /// preamble followed by the dataset label and timestamp fields.
     /// For XML formats (117+) this emits the `<stata_dta><header>`
     /// opening tags and the `<release>`, `<byteorder>`, `<K>`, `<N>`,
@@ -87,7 +87,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncHeaderWriter<W> {
 }
 
 // ---------------------------------------------------------------------------
-// Binary format (104–116)
+// Binary format (102–116)
 // ---------------------------------------------------------------------------
 
 impl<W: AsyncWrite + Unpin> AsyncHeaderWriter<W> {
@@ -330,7 +330,7 @@ mod tests {
             .clone()
     }
 
-    // -- Binary header round-trips (formats 104–116) -------------------------
+    // -- Binary header round-trips (formats 102–116) -------------------------
 
     #[tokio::test]
     async fn binary_v114_little_endian_round_trip() {

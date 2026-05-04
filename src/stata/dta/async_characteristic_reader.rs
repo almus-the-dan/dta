@@ -15,7 +15,7 @@ use super::schema::Schema;
 /// Reads characteristics from a DTA file asynchronously.
 ///
 /// For XML formats (117+), reads the `<characteristics>` section.
-/// For binary formats (104–116), reads expansion fields.
+/// For binary formats (102–116), reads expansion fields.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous phases.
 /// Call [`read_characteristic`](Self::read_characteristic) repeatedly
@@ -236,7 +236,7 @@ impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Binary internals (format 104–116)
+// Binary internals (format 102–116)
 // ---------------------------------------------------------------------------
 
 impl<R: AsyncRead + Unpin> AsyncCharacteristicReader<R> {

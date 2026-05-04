@@ -13,7 +13,7 @@ use super::release::Release;
 use crate::stata::stata_timestamp::StataTimestamp;
 
 /// Validates a binary-format release byte. Binary formats only accept
-/// 104–116; 117+ use XML and trip `InvalidMagic` here.
+/// 102–116; 117+ use XML and trip `InvalidMagic` here.
 pub(super) fn parse_binary_release(byte: u8) -> Result<Release> {
     let release =
         Release::try_from(byte).map_err(|kind| DtaError::format(Section::Header, 0, kind))?;

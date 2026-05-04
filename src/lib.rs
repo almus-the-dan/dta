@@ -5,7 +5,7 @@
 //! Two related formats live in this crate:
 //!
 //! - **DTA** — Stata's binary dataset format ([`stata::dta`]). Every
-//!   released version is supported (104 through 119), including
+//!   released version is supported (102 through 119), including
 //!   XML-framed releases (117+), tagged missing values, value-label
 //!   sets, and long-string (`strL`) storage. The API is built around
 //!   a typestate chain — you walk through the sections of a file in

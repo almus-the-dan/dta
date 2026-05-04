@@ -17,7 +17,7 @@ use super::value_label_reader::ValueLabelReader;
 /// Reads characteristics from a DTA file.
 ///
 /// For XML formats (117+), it reads the `<characteristics>` section.
-/// For binary formats (104–116), reads expansion fields.
+/// For binary formats (102–116), reads expansion fields.
 ///
 /// Owns the parsed [`Header`] and [`Schema`] from previous phases.
 /// Call [`into_record_reader`](Self::into_record_reader) after
@@ -241,7 +241,7 @@ impl<R: BufRead> CharacteristicReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Binary internals (format 104–116)
+// Binary internals (format 102–116)
 // ---------------------------------------------------------------------------
 
 impl<R: BufRead> CharacteristicReader<R> {

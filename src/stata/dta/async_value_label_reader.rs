@@ -174,7 +174,7 @@ impl<R: AsyncRead + Unpin> AsyncValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Old value labels (format 104-107)
+// Old value labels (format 102-107)
 // ---------------------------------------------------------------------------
 //
 // Pre-V108 sets have the layout:

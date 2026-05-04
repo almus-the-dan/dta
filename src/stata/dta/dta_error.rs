@@ -265,7 +265,7 @@ pub enum FormatErrorKind {
         actual: u32,
     },
     /// The target release has no expansion-field section at all
-    /// (V104), so the characteristics section cannot hold any
+    /// (V102–V104), so the characteristics section cannot hold any
     /// entries.
     CharacteristicsUnsupported {
         /// The release that cannot store characteristics.

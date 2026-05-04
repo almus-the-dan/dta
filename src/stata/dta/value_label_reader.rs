@@ -174,7 +174,7 @@ impl<R: BufRead> ValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Old value labels (format 104-107)
+// Old value labels (format 102-107)
 // ---------------------------------------------------------------------------
 //
 // Pre-V108 sets have the layout:
@@ -187,7 +187,7 @@ impl<R: BufRead> ValueLabelReader<R> {
 // Values round-trip through `i16` so negative codings survive.
 
 impl<R: BufRead> ValueLabelReader<R> {
-    /// Reads and parses one set in the old (V104-V107) layout.
+    /// Reads and parses one set in the old (V102-V107) layout.
     fn read_old_set(&mut self) -> Result<Option<ValueLabelSet>> {
         let Some(entry_count) = self.read_old_entry_count()? else {
             return Ok(None);

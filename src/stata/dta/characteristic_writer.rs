@@ -93,8 +93,8 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     ///
     /// Returns [`DtaError::Format`]
     /// with [`CharacteristicsUnsupported`](FormatErrorKind::CharacteristicsUnsupported)
-    /// if the header's release is V104 (which has no expansion-field
-    /// section), [`InvalidEncoding`](FormatErrorKind::InvalidEncoding)
+    /// if the header's release is V102–V104 (which have no
+    /// expansion-field section), [`InvalidEncoding`](FormatErrorKind::InvalidEncoding)
     /// if the name or value contains bytes the active encoding
     /// cannot represent, and [`FieldTooLarge`](FormatErrorKind::FieldTooLarge)
     /// if the entry exceeds the format's length ceiling.
@@ -122,7 +122,7 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
     /// For XML the closing `</characteristics>` tag is emitted even
     /// if no entries were written (the opening tag is lazy-emitted
     /// here in that case). For pre-117 binary formats (V105–V116) a
-    /// zero-length terminator entry is written. V104 has no
+    /// zero-length terminator entry is written. V102–V104 have no
     /// expansion-field section at all, so nothing is written.
     ///
     /// # Errors
@@ -136,7 +136,7 @@ impl<W: Write + Seek> CharacteristicWriter<W> {
         if let Some(is_extended) = release.supports_extended_expansion() {
             self.write_terminator(release, is_extended, byte_order)?;
         }
-        // V104 has no expansion-field section at all — nothing to close.
+        // V102–V104 have no expansion-field section at all — nothing to close.
 
         if release.is_xml_like() {
             let records_offset = self.state.position();

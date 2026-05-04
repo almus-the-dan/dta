@@ -1,7 +1,7 @@
 /// Byte offsets for each post-schema section in a DTA file.
 ///
 /// For XML formats (117+), all offsets are read from the `<map>`
-/// section during schema parsing. For binary formats (104–116), the
+/// section during schema parsing. For binary formats (102–116), the
 /// variable characteristics offset is known after schema reading; the data and
 /// value-label offsets are computed by the characteristic reader after
 /// it consumes the expansion fields.
@@ -17,7 +17,7 @@ impl SectionOffsets {
     /// Creates a new set of section offsets.
     ///
     /// Pass `None` for `long_strings` when the format does not have a
-    /// strL section (binary formats 104–116).
+    /// strL section (binary formats 102–116).
     #[must_use]
     pub fn new(
         characteristics: u64,

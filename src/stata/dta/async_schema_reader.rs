@@ -388,7 +388,7 @@ mod tests {
             .build()
     }
 
-    // -- Binary reader happy-paths (formats 104–116) -------------------------
+    // -- Binary reader happy-paths (formats 102–116) -------------------------
 
     #[tokio::test]
     async fn binary_v114_mixed_types() {

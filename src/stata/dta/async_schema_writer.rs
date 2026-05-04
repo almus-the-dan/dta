@@ -372,7 +372,7 @@ mod tests {
             .build()
     }
 
-    // -- Binary round-trips (formats 104–116) --------------------------------
+    // -- Binary round-trips (formats 102–116) --------------------------------
 
     #[tokio::test]
     async fn binary_v114_mixed_types() {

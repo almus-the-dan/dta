@@ -165,7 +165,7 @@ impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
 }
 
 impl<W: AsyncWrite + AsyncSeek + Unpin> AsyncValueLabelWriter<W> {
-    /// Writes one set in the V104-V107 legacy layout:
+    /// Writes one set in the V102-V107 legacy layout:
     ///
     /// - `n`: `u16` — entry count
     /// - `name`: fixed-width 9 bytes + 1-byte padding

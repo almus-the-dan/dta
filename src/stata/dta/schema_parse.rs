@@ -17,13 +17,13 @@ use super::variable_type::VariableType;
 ///
 /// | Formats   | Numeric codes          | String codes            |
 /// |-----------|------------------------|-------------------------|
-/// | 104–110   | ASCII `b/i/l/f/d`      | `≥ 0x7F` → len − 0x7F  |
+/// | 102–110   | ASCII `b/i/l/f/d`      | `≥ 0x7F` → len − 0x7F  |
 /// | 111–116   | `0xFB`–`0xFF`          | code = byte length      |
 /// | 117+      | `0xFFF6`–`0xFFFA`      | code = byte length      |
 /// |           | `0x8000` = strL        |                         |
 ///
 /// String codes are validated against the maximum fixed-string length
-/// for the format version (80 for 104–110, 244 for 111–116, 2045 for
+/// for the format version (80 for 102–110, 244 for 111–116, 2045 for
 /// 117+). Codes outside the valid range produce an
 /// [`InvalidVariableType`](FormatErrorKind::InvalidVariableType) error.
 pub(super) fn parse_type_code(code: u16, release: Release, position: u64) -> Result<VariableType> {

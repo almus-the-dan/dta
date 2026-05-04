@@ -159,9 +159,10 @@ impl Release {
 
     /// Fixed-length timestamp field size for binary formats.
     ///
-    /// Returns `None` for format 104 (no timestamp at all) and
-    /// `Some(18)` for 105–116. For XML formats, the timestamp has a
-    /// 1-byte length prefix, and this method is not consulted.
+    /// Returns `None` for formats 102–104 (which have no timestamp
+    /// field at all) and `Some(18)` for 105–116. For XML formats, the
+    /// timestamp has a 1-byte length prefix, and this method is not
+    /// consulted.
     #[must_use]
     pub(crate) fn timestamp_len(self) -> Option<usize> {
         if self < Self::V105 { None } else { Some(18) }
@@ -346,7 +347,7 @@ impl Release {
 
     /// Maximum byte length of a fixed-length string variable.
     ///
-    /// Formats 104–110 support str1–str80, 111–116 support str1–str244,
+    /// Formats 102–110 support str1–str80, 111–116 support str1–str244,
     /// and 117+ support str1–str2045.
     #[must_use]
     pub(crate) fn max_fixed_string_len(self) -> u16 {
@@ -364,7 +365,7 @@ impl Release {
     ///
     /// | Release   | Return           | Meaning                          |
     /// |-----------|------------------|----------------------------------|
-    /// | V104      | `None`           | no expansion-field section       |
+    /// | V102–V104 | `None`           | no expansion-field section       |
     /// | V105–V109 | `Some(false)`    | `u16` length (narrow)            |
     /// | V110+     | `Some(true)`     | `u32` length (extended)          |
     ///
@@ -384,7 +385,7 @@ impl Release {
 
     /// Whether the format uses the old (pre-108) value-label layout.
     ///
-    /// The old layout (V104-V107) stores each set as a `u16` entry
+    /// The old layout (V102-V107) stores each set as a `u16` entry
     /// count, a 9-byte name, a 1-byte pad, `u16` values, and 8-byte
     /// fixed-width labels. Format 108+ switches to a richer layout
     /// with a `u32` payload length, `u32` values, and variable-width
@@ -397,7 +398,7 @@ impl Release {
     /// Padding bytes after the label name field in a value-label
     /// table entry.
     ///
-    /// Returns 1 for V104-V107 and 3 for V108+.
+    /// Returns 1 for V102-V107 and 3 for V108+.
     #[must_use]
     pub(crate) fn value_label_table_padding_len(self) -> usize {
         if self.has_old_value_labels() { 1 } else { 3 }

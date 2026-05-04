@@ -58,7 +58,7 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     ///
     /// Auto-detects the format by reading the first byte: `b'<'`
     /// selects the XML header parser (formats 117+), otherwise the
-    /// binary parser (formats 104–116). Determines the character
+    /// binary parser (formats 102–116). Determines the character
     /// encoding from the release number (Windows-1252 for pre-118,
     /// UTF-8 for 118+), unless an explicit encoding override was set
     /// on the `DtaReader` builder.
@@ -68,7 +68,7 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
     /// read failures and [`DtaError::Format`](super::dta_error::DtaError::Format)
     /// when the header bytes do not match any supported DTA format
-    /// (104–119).
+    /// (102–119).
     pub async fn read_header(mut self) -> Result<AsyncSchemaReader<R>> {
         let first_byte = self.state.read_u8(Section::Header).await?;
 
@@ -110,7 +110,7 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Binary format (104–116)
+// Binary format (102–116)
 // ---------------------------------------------------------------------------
 
 impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
@@ -330,7 +330,7 @@ impl<R: AsyncRead + Unpin> AsyncHeaderReader<R> {
     /// Reads a `len`-byte fixed-width timestamp field and parses it.
     /// Returns `None` when the bytes contain no parseable timestamp
     /// (empty or zero-filled). Callers that know the field is absent
-    /// (V104 binary, or an XML `<timestamp>` with a `0` length
+    /// (V102–V104 binary, or an XML `<timestamp>` with a `0` length
     /// prefix) should not call this.
     async fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
         let buffer = self.state.read_exact(len, Section::Header).await?;
@@ -454,7 +454,7 @@ mod tests {
             .clone()
     }
 
-    // -- Binary header parsing (formats 104–116) -----------------------------
+    // -- Binary header parsing (formats 102–116) -----------------------------
 
     #[tokio::test]
     async fn binary_v114_little_endian() {

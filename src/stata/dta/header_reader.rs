@@ -65,7 +65,7 @@ impl<R: BufRead + Seek> HeaderReader<R> {
     /// Returns [`DtaError::Io`](super::dta_error::DtaError::Io) on
     /// read failures and
     /// [`DtaError::Format`](super::dta_error::DtaError::Format) when
-    /// the header bytes do not match any supported DTA format (104–119).
+    /// the header bytes do not match any supported DTA format (102–119).
     pub fn read_header(mut self) -> Result<SchemaReader<R>> {
         let first_byte = self.state.read_u8(Section::Header)?;
 
@@ -103,7 +103,7 @@ impl<R: BufRead + Seek> HeaderReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Binary format (104–116)
+// Binary format (102–116)
 // ---------------------------------------------------------------------------
 
 impl<R: Read> HeaderReader<R> {
@@ -325,7 +325,7 @@ impl<R: Read> HeaderReader<R> {
     /// Reads a `len`-byte fixed-width timestamp field and parses it.
     /// Returns `None` when the bytes contain no parseable timestamp
     /// (empty or zero-filled). Callers that know the field is absent
-    /// (`V104` binary, or an XML `<timestamp>` with a `0` length
+    /// (V102–V104 binary, or an XML `<timestamp>` with a `0` length
     /// prefix) should not call this.
     fn read_fixed_timestamp(&mut self, len: usize) -> Result<Option<StataTimestamp>> {
         let buffer = self.state.read_exact(len, Section::Header)?;
@@ -460,7 +460,7 @@ mod tests {
             .clone()
     }
 
-    // -- Binary header parsing (formats 104–116) -----------------------------
+    // -- Binary header parsing (formats 102–116) -----------------------------
 
     #[test]
     fn binary_v114_little_endian() {
