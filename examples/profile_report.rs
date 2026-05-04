@@ -287,7 +287,7 @@ fn print_top_functions(profile: &Value, symbol_map: &[SymbolEntry], top_n: usize
         .filter(|(name, _)| is_own_code(name))
         .map(|(name, count)| (name.as_str(), *count))
         .collect();
-    own_functions.sort_by(|a, b| b.1.cmp(&a.1));
+    own_functions.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     let sampling_interval_ms = 1.0;
     #[allow(clippy::cast_precision_loss)]
