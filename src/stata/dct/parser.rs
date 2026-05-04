@@ -36,7 +36,7 @@ pub(super) fn parse_dct<R: BufRead>(mut reader: R) -> Result<DctSource<R>> {
 
     let schema = state.into_schema();
     let source = if has_more_data(&mut reader)? {
-        let reader = DctReader::new(schema, reader);
+        let reader = DctReader::new(schema, reader, true);
         DctSource::Embedded(reader)
     } else {
         DctSource::External(schema)

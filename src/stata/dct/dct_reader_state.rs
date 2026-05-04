@@ -65,6 +65,10 @@ pub(super) struct DctReaderState {
     observation_number: usize,
     completed: bool,
     warnings: Vec<DctWarning>,
+    /// When `false`, [`build_record`](Self::build_record) skips
+    /// warning construction by passing `None` down to the field
+    /// parser; the `warnings` Vec stays empty (no allocation).
+    record_warnings: bool,
     /// Per-line runtime cursor scratch buffer used by
     /// [`build_record`](Self::build_record). Lives on the state so
     /// the allocation is reused across observations.
@@ -81,13 +85,14 @@ pub(super) struct DctReaderState {
 
 impl DctReaderState {
     #[must_use]
-    pub(super) fn new(schema: Schema) -> Self {
+    pub(super) fn new(schema: Schema, record_warnings: bool) -> Self {
         Self {
             schema,
             line_buffers: Vec::new(),
             observation_number: 0,
             completed: false,
             warnings: Vec::new(),
+            record_warnings,
             runtime_cursors: Vec::new(),
             relative_offset_cache: RefCell::new(Vec::new()),
         }
@@ -170,7 +175,8 @@ impl DctReaderState {
         let schema = &self.schema;
         let line_buffers = &self.line_buffers;
         let observation_number = self.observation_number;
-        let warnings = &mut self.warnings;
+        let warnings_vec = &mut self.warnings;
+        let record_warnings = self.record_warnings;
         let runtime_cursors = &mut self.runtime_cursors;
 
         let lines_per_observation = schema.lines_per_observation();
@@ -185,7 +191,15 @@ impl DctReaderState {
 
             let start = resolve_column_start(column, cursor, observation_number)?;
 
-            let value = parse_field(line, start, column, observation_number, Some(warnings))?;
+            // Reborrow `warnings_vec` each iteration so we can hand
+            // out a fresh `&mut` to the field parser; if warnings are
+            // disabled, pass `None` so no warning is constructed.
+            let warnings = if record_warnings {
+                Some(&mut *warnings_vec)
+            } else {
+                None
+            };
+            let value = parse_field(line, start, column, observation_number, warnings)?;
             values.push(value);
 
             runtime_cursors[line_index] = simulate_read_advance(line, start, column.input_format());

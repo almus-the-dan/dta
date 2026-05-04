@@ -37,10 +37,10 @@ impl<R> AsyncDctReader<R> {
     /// Crate-private. External callers go through
     /// [`DctReaderOptions::from_tokio_reader`](super::dct_reader_options::DctReaderOptions::from_tokio_reader)
     /// (and its `from_tokio_file` / `from_tokio_path` siblings).
-    pub(super) fn new(schema: Schema, inner: R) -> Self {
+    pub(super) fn new(schema: Schema, inner: R, record_warnings: bool) -> Self {
         Self {
             inner,
-            state: DctReaderState::new(schema),
+            state: DctReaderState::new(schema, record_warnings),
         }
     }
 

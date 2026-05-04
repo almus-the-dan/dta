@@ -22,12 +22,29 @@ use super::async_dct_reader::AsyncDctReader;
 #[derive(Debug)]
 pub struct DctReaderOptions {
     schema: Schema,
+    record_warnings: bool,
 }
 
 impl DctReaderOptions {
     #[must_use]
     pub(super) fn new(schema: Schema) -> Self {
-        Self { schema }
+        Self {
+            schema,
+            record_warnings: true,
+        }
+    }
+
+    /// Controls whether per-record warnings are accumulated.
+    ///
+    /// Defaults to `true`. Set to `false` when the caller doesn't
+    /// inspect [`DctReader::warnings`](DctReader::warnings) — the
+    /// reader skips warning construction entirely, leaving the
+    /// internal buffer empty across reads.
+    #[must_use]
+    #[inline]
+    pub fn record_warnings(mut self, enabled: bool) -> Self {
+        self.record_warnings = enabled;
+        self
     }
 
     /// Creates a [`DctReader`] wrapping the given buffered source.
@@ -38,7 +55,7 @@ impl DctReaderOptions {
     #[must_use]
     #[inline]
     pub fn from_reader<R: BufRead>(self, reader: R) -> DctReader<R> {
-        DctReader::new(self.schema, reader)
+        DctReader::new(self.schema, reader, self.record_warnings)
     }
 
     /// Creates a [`DctReader`] wrapping the file in a [`BufReader`].
@@ -75,7 +92,7 @@ impl DctReaderOptions {
         self,
         reader: R,
     ) -> AsyncDctReader<R> {
-        AsyncDctReader::new(self.schema, reader)
+        AsyncDctReader::new(self.schema, reader, self.record_warnings)
     }
 
     /// Creates an [`AsyncDctReader`] wrapping the async file in a

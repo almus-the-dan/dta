@@ -32,7 +32,7 @@ pub(super) async fn parse_dct<R: AsyncBufRead + Unpin>(mut reader: R) -> Result<
 
     let schema = state.into_schema();
     let source = if has_more_data(&mut reader).await? {
-        let reader = DctReader::new(schema, reader);
+        let reader = DctReader::new(schema, reader, true);
         DctSource::Embedded(reader)
     } else {
         DctSource::External(schema)

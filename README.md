@@ -221,6 +221,14 @@ Per-record diagnostics surface as `DctWarning` values on the reader: blank short
 
 A note on real-world coverage: the rarer directives (`lrecl(#)`, `firstlineoffile(#)`, `_newline`, free-format reads) are implemented against Stata's documentation but I haven't found a `.dct` file in the wild that uses them — every public dictionary I sampled had been cleaned up to the common subset. If you hit a bug with one of these, please file an issue with a small representative `.dct` file and the matching data file so I can reproduce.
 
+If you don't intend to inspect `warnings()` — for example, in a tight read loop where you only care about values — disable warning collection on the options builder so the reader can skip building the diagnostic structs entirely:
+
+```rust
+let mut reader = DctReader::options(schema)
+    .record_warnings(false)
+    .from_path(data_path)?;
+```
+
 ## Feature Flags
 
 ### `chrono` — date/time helpers

@@ -52,10 +52,10 @@ impl<R> DctReader<R> {
     /// [`DctReader::options`] / [`DctReaderOptions`] so future
     /// configuration knobs can be added without breaking the
     /// construction surface.
-    pub(super) fn new(schema: Schema, inner: R) -> Self {
+    pub(super) fn new(schema: Schema, inner: R, record_warnings: bool) -> Self {
         Self {
             inner,
-            state: DctReaderState::new(schema),
+            state: DctReaderState::new(schema, record_warnings),
         }
     }
 
@@ -478,6 +478,33 @@ mod tests {
         let mut reader = parse_with_data(input);
         let result = reader.read_record();
         assert!(matches!(result, Err(DctError::InvalidNumericValue { .. })));
+    }
+
+    #[test]
+    fn disabled_warnings_leave_buffer_empty() {
+        // Same scenario as the integer-promotion test, but with
+        // warnings disabled at the options builder. The promotion
+        // still happens (it has to — the value doesn't fit the
+        // declared type) but no warning is recorded.
+        let dict = b"dictionary {\n_column(1) byte b1 %3.0f\n}\n";
+        let data = b"200\n";
+        let source = DctSource::options()
+            .from_reader(Cursor::new(&dict[..]))
+            .unwrap();
+        let DctSource::External(schema) = source else {
+            panic!("expected external schema");
+        };
+        let mut reader = DctReader::options(schema)
+            .record_warnings(false)
+            .from_reader(Cursor::new(&data[..]));
+        {
+            let record = reader.read_record().unwrap().unwrap();
+            assert!(matches!(
+                record.values()[0],
+                Value::Int(StataInt::Present(200))
+            ));
+        }
+        assert!(reader.warnings().is_empty());
     }
 
     #[test]
