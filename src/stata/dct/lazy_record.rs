@@ -136,10 +136,10 @@ mod tests {
         let source = DctSource::options()
             .from_reader(Cursor::new(input))
             .unwrap();
-        let DctSource::Embedded(reader) = source else {
+        let DctSource::Embedded { schema, reader } = source else {
             panic!("expected embedded data")
         };
-        reader
+        crate::stata::dct::dct_reader::DctReader::options(schema).from_reader(reader)
     }
 
     #[test]

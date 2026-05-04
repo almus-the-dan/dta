@@ -9,7 +9,6 @@
 use std::io::BufRead;
 
 use super::dct_error::{DctError, Result};
-use super::dct_reader::DctReader;
 use super::dct_source::DctSource;
 use super::dct_source_state::{DctSourceState, FeedOutcome};
 
@@ -36,8 +35,7 @@ pub(super) fn parse_dct<R: BufRead>(mut reader: R) -> Result<DctSource<R>> {
 
     let schema = state.into_schema();
     let source = if has_more_data(&mut reader)? {
-        let reader = DctReader::new(schema, reader, true);
-        DctSource::Embedded(reader)
+        DctSource::Embedded { schema, reader }
     } else {
         DctSource::External(schema)
     };
@@ -280,7 +278,7 @@ mod tests {
     #[test]
     fn detects_embedded_data() {
         let src = parse(b"dictionary {\n_column(1) v\n}\n42\n").unwrap();
-        assert!(matches!(src, DctSource::Embedded(_)));
+        assert!(matches!(src, DctSource::Embedded { .. }));
     }
 
     #[test]

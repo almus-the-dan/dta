@@ -156,9 +156,11 @@ fn read_dct(dict_path: &str, data_path: &str) -> Result<()> {
             // Step 2a: open the data file separately.
             DctReader::options(schema).from_path(data_path)?
         }
-        DctSource::Embedded(reader) => {
-            // Step 2b: data was inlined; the reader is positioned at it.
-            reader
+        DctSource::Embedded { schema, reader } => {
+            // Step 2b: data was inlined; `reader` is positioned at it.
+            // Pair it with the schema through the same options
+            // builder so reader-side knobs apply to either path.
+            DctReader::options(schema).from_reader(reader)
         }
     };
 

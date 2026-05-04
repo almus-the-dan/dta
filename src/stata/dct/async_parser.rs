@@ -8,7 +8,6 @@
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 
 use super::dct_error::{DctError, Result};
-use super::dct_reader::DctReader;
 use super::dct_source::DctSource;
 use super::dct_source_state::{DctSourceState, FeedOutcome};
 
@@ -32,8 +31,7 @@ pub(super) async fn parse_dct<R: AsyncBufRead + Unpin>(mut reader: R) -> Result<
 
     let schema = state.into_schema();
     let source = if has_more_data(&mut reader).await? {
-        let reader = DctReader::new(schema, reader, true);
-        DctSource::Embedded(reader)
+        DctSource::Embedded { schema, reader }
     } else {
         DctSource::External(schema)
     };
@@ -103,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn detects_embedded_data() {
         let src = parse(b"dictionary {\n_column(1) v\n}\n42\n").await.unwrap();
-        assert!(matches!(src, DctSource::Embedded(_)));
+        assert!(matches!(src, DctSource::Embedded { .. }));
     }
 
     #[tokio::test]

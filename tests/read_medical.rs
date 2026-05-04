@@ -41,13 +41,15 @@ fn read_medical_embedded() {
     let source = DctSource::options()
         .from_path(dictionary_path)
         .expect("dictionary should parse");
-    let DctSource::Embedded(mut reader) = source else {
+    let DctSource::Embedded { schema, reader } = source else {
         panic!("expected the dictionary to embed its data after the closing brace");
     };
 
-    assert_eq!(reader.schema().lines_per_observation(), 3);
-    assert_eq!(reader.schema().columns().len(), 4);
-    assert_eq!(reader.schema().declared_data_path(), None);
+    assert_eq!(schema.lines_per_observation(), 3);
+    assert_eq!(schema.columns().len(), 4);
+    assert_eq!(schema.declared_data_path(), None);
+
+    let mut reader = DctReader::options(schema).from_reader(reader);
 
     let observations = collect_observations(&mut reader);
     assert_eq!(observations, expected_observations());

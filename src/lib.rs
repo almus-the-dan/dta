@@ -150,7 +150,9 @@
 //!     DctSource::External(schema) => {
 //!         DctReader::options(schema).from_path("data.dat")?
 //!     }
-//!     DctSource::Embedded(reader) => reader,
+//!     DctSource::Embedded { schema, reader } => {
+//!         DctReader::options(schema).from_reader(reader)
+//!     }
 //! };
 //!
 //! // Capture column names up front: the lending pattern means

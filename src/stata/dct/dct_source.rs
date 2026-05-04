@@ -1,4 +1,3 @@
-use super::dct_reader::DctReader;
 use super::dct_source_options::DctSourceOptions;
 use super::schema::Schema;
 
@@ -8,16 +7,32 @@ use super::schema::Schema;
 /// data: an external file referenced by the `using` clause (or no
 /// file at all), vs. data embedded in the same file immediately
 /// after the dictionary's closing `}`.
+///
+/// Both variants surface only the [`Schema`] (and, for embedded
+/// data, the buffered reader positioned at the first byte of the
+/// data section) — the caller pairs them with
+/// [`DctReader::options`](super::dct_reader::DctReader::options) so
+/// reader-side knobs like `record_warnings` can be configured
+/// uniformly across both paths.
 #[derive(Debug)]
 pub enum DctSource<R> {
     /// The dictionary references an external data file or none at
-    /// all. Supply the data reader yourself via
-    /// [`DctReader::options`](DctReader::options) to read records.
+    /// all. Pair the schema with your own data reader via
+    /// [`DctReader::options`](super::dct_reader::DctReader::options).
     External(Schema),
     /// Data immediately follows the closing `}` in the dictionary
-    /// file. The contained reader is positioned at the first byte of
-    /// the data section.
-    Embedded(DctReader<R>),
+    /// file. `reader` is positioned at the first byte of the data
+    /// section; pair it with `schema` via
+    /// [`DctReader::options(schema).from_reader(reader)`](super::dct_reader_options::DctReaderOptions::from_reader)
+    /// (or the async equivalent) to begin reading records.
+    Embedded {
+        /// Schema parsed from the dictionary block.
+        schema: Schema,
+        /// Buffered reader positioned at the first byte of the
+        /// data section. Pair with `schema` through
+        /// [`DctReader::options`](super::dct_reader::DctReader::options).
+        reader: R,
+    },
 }
 
 impl DctSource<()> {
@@ -38,8 +53,7 @@ impl<R> DctSource<R> {
     #[must_use]
     pub fn schema(&self) -> &Schema {
         match self {
-            Self::External(schema) => schema,
-            Self::Embedded(reader) => reader.schema(),
+            Self::External(schema) | Self::Embedded { schema, .. } => schema,
         }
     }
 }
