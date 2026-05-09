@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-09
+
+### Changed
+
+- DTA reader generic bounds relaxed across the sync chain: `HeaderReader::read_header`, `SchemaReader::read_schema`, and the sequential-reading methods on `CharacteristicReader`, `RecordReader`, `LongStringReader`, and `ValueLabelReader` now require only `R: Read` instead of `R: BufRead` (or `R: BufRead + Seek` in the header-reader case). The corresponding seek-navigation methods now require `R: Read + Seek` instead of `R: BufRead + Seek`. None of these readers actually called `BufRead`-specific methods — every read flows through `ReaderState`, which only needs `Read` — so the previous bounds were vestigial. `DtaReader::from_file` / `from_path` still wrap the file in a `BufReader` for syscall amortization, so the common path is unchanged. Loosening generic bounds is non-breaking under SemVer.
+
 ## [0.5.0] - 2026-05-04
 
 ### Added
