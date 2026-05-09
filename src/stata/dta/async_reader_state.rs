@@ -1,7 +1,7 @@
-use std::io::ErrorKind;
+use std::io::{ErrorKind, SeekFrom};
 
 use encoding_rs::Encoding;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use super::byte_order::ByteOrder;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
@@ -186,7 +186,21 @@ impl<R: AsyncRead + Unpin> AsyncReaderState<R> {
         }
         Ok(())
     }
+}
 
+impl<R: AsyncSeek + Unpin> AsyncReaderState<R> {
+    /// Seeks to an absolute byte position in the underlying reader.
+    pub async fn seek_to(&mut self, position: u64, section: Section) -> Result<()> {
+        self.reader
+            .seek(SeekFrom::Start(position))
+            .await
+            .map_err(|e| DtaError::io(section, e))?;
+        self.position = position;
+        Ok(())
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncReaderState<R> {
     /// Reads a fixed-length byte field and decodes it as a
     /// null-terminated string. Returns an empty string when `len` is 0.
     pub async fn read_fixed_string(
