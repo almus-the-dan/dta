@@ -1,4 +1,4 @@
-use std::io::{BufRead, Read};
+use std::io::Read;
 
 use super::byte_order::ByteOrder;
 use super::characteristic_reader::CharacteristicReader;
@@ -55,7 +55,7 @@ impl<R> SchemaReader<R> {
 // Public API
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> SchemaReader<R> {
+impl<R: Read> SchemaReader<R> {
     /// Parses variable definitions and transitions to characteristic
     /// reading.
     ///

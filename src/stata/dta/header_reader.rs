@@ -1,4 +1,4 @@
-use std::io::{BufRead, Read, Seek};
+use std::io::Read;
 
 use encoding_rs::Encoding;
 
@@ -56,7 +56,7 @@ impl<R> HeaderReader<R> {
     }
 }
 
-impl<R: BufRead + Seek> HeaderReader<R> {
+impl<R: Read> HeaderReader<R> {
     /// Parses the file header, determines the encoding, and
     /// transitions to schema reading.
     ///

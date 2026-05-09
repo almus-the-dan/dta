@@ -1,4 +1,4 @@
-use std::io::{BufRead, Seek};
+use std::io::{Read, Seek};
 
 use super::characteristic::{Characteristic, CharacteristicTarget, ExpansionFieldType};
 use super::characteristic_parse::{
@@ -68,10 +68,10 @@ impl<R> CharacteristicReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Sequential reading (BufRead)
+// Sequential reading (Read)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> CharacteristicReader<R> {
+impl<R: Read> CharacteristicReader<R> {
     /// Reads the next characteristic entry.
     ///
     /// Returns `None` when all entries have been consumed. For XML
@@ -159,7 +159,7 @@ impl<R: BufRead> CharacteristicReader<R> {
 // XML internals (format 117+)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> CharacteristicReader<R> {
+impl<R: Read> CharacteristicReader<R> {
     /// Reads the next XML-level tag in the characteristics section.
     fn read_xml_tag(&mut self) -> Result<XmlCharacteristicTag> {
         let position = self.state.position();
@@ -244,7 +244,7 @@ impl<R: BufRead> CharacteristicReader<R> {
 // Binary internals (format 102–116)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> CharacteristicReader<R> {
+impl<R: Read> CharacteristicReader<R> {
     /// Reads one binary expansion-field header (type byte + length).
     ///
     /// The `is_extended` flag selects whether the length field is 4
@@ -354,7 +354,7 @@ impl<R: BufRead> CharacteristicReader<R> {
 // Shared payload parsing
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> CharacteristicReader<R> {
+impl<R: Read> CharacteristicReader<R> {
     /// Parses the payload of a characteristic entry: variable name,
     /// characteristic name, and value (all null-terminated, fixed-width
     /// name fields).
@@ -391,10 +391,10 @@ impl<R: BufRead> CharacteristicReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Seek-based navigation (BufRead + Seek)
+// Seek-based navigation (Read + Seek)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead + Seek> CharacteristicReader<R> {
+impl<R: Read + Seek> CharacteristicReader<R> {
     /// Seeks to the start of the characteristics section.
     ///
     /// # Errors

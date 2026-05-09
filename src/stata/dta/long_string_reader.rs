@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::io::{BufRead, Seek};
+use std::io::{Read, Seek};
 
 use super::byte_order::ByteOrder;
 use super::characteristic_reader::CharacteristicReader;
@@ -69,10 +69,10 @@ impl<R> LongStringReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Sequential reading (BufRead)
+// Sequential reading (Read)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> LongStringReader<R> {
+impl<R: Read> LongStringReader<R> {
     /// Reads the next long string (strL / GSO) entry.
     ///
     /// Returns `None` when all entries have been consumed. Each entry
@@ -185,7 +185,7 @@ impl<R: BufRead> LongStringReader<R> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> LongStringReader<R> {
+impl<R: Read> LongStringReader<R> {
     /// Reads the next GSO entry header, or returns `None` at the
     /// `</strls>` closing tag.
     ///
@@ -261,10 +261,10 @@ impl<R: BufRead> LongStringReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Seek-based navigation (BufRead + Seek)
+// Seek-based navigation (Read + Seek)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead + Seek> LongStringReader<R> {
+impl<R: Read + Seek> LongStringReader<R> {
     /// Seeks to the characteristics section.
     ///
     /// # Errors

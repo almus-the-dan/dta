@@ -1,4 +1,4 @@
-use std::io::{BufRead, Seek};
+use std::io::{Read, Seek};
 
 use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, FormatErrorKind, Result, Section};
@@ -67,10 +67,10 @@ impl<R> RecordReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Sequential reading (BufRead)
+// Sequential reading (Read)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> RecordReader<R> {
+impl<R: Read> RecordReader<R> {
     /// Reads the next observation, eagerly parsing all values.
     ///
     /// Returns `None` when all observations have been consumed.
@@ -186,7 +186,7 @@ impl<R: BufRead> RecordReader<R> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> RecordReader<R> {
+impl<R: Read> RecordReader<R> {
     /// Reads the next row's bytes into the internal buffer.
     ///
     /// Returns `true` if a row was read, `false` if all observations
@@ -236,10 +236,10 @@ impl<R: BufRead> RecordReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Seek-based navigation (BufRead + Seek)
+// Seek-based navigation (Read + Seek)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead + Seek> RecordReader<R> {
+impl<R: Read + Seek> RecordReader<R> {
     /// Seeks to the characteristics section.
     ///
     /// # Errors

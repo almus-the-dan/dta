@@ -1,4 +1,4 @@
-use std::io::{BufRead, Seek};
+use std::io::{Read, Seek};
 
 use super::characteristic_reader::CharacteristicReader;
 use super::dta_error::{DtaError, Field, FormatErrorKind, Result, Section};
@@ -68,10 +68,10 @@ impl<R> ValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Sequential reading (BufRead)
+// Sequential reading (Read)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> ValueLabelReader<R> {
+impl<R: Read> ValueLabelReader<R> {
     /// Reads the next value-label set.
     ///
     /// Returns `None` when all sets have been consumed. Each set
@@ -146,7 +146,7 @@ impl<R: BufRead> ValueLabelReader<R> {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> ValueLabelReader<R> {
+impl<R: Read> ValueLabelReader<R> {
     /// Reads the set name and skips the trailing padding bytes.
     fn read_set_name(&mut self) -> Result<String> {
         let release = self.header.release();
@@ -186,7 +186,7 @@ impl<R: BufRead> ValueLabelReader<R> {
 //
 // Values round-trip through `i16` so negative codings survive.
 
-impl<R: BufRead> ValueLabelReader<R> {
+impl<R: Read> ValueLabelReader<R> {
     /// Reads and parses one set in the old (V102-V107) layout.
     fn read_old_set(&mut self) -> Result<Option<ValueLabelSet>> {
         let Some(entry_count) = self.read_old_entry_count()? else {
@@ -240,7 +240,7 @@ fn old_payload_len(entry_count: usize) -> Result<usize> {
 // Modern value labels (format 105+)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead> ValueLabelReader<R> {
+impl<R: Read> ValueLabelReader<R> {
     /// Reads and parses one set in the modern (105+) layout.
     fn read_modern_set(&mut self) -> Result<Option<ValueLabelSet>> {
         let Some(set_len) = self.read_modern_set_header()? else {
@@ -335,10 +335,10 @@ impl<R: BufRead> ValueLabelReader<R> {
 }
 
 // ---------------------------------------------------------------------------
-// Seek-based navigation (BufRead + Seek)
+// Seek-based navigation (Read + Seek)
 // ---------------------------------------------------------------------------
 
-impl<R: BufRead + Seek> ValueLabelReader<R> {
+impl<R: Read + Seek> ValueLabelReader<R> {
     /// Seeks to the characteristics section.
     ///
     /// # Errors
