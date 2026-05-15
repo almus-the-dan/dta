@@ -1,6 +1,6 @@
 [package]
 name = "dta"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 description = "Pure Rust streaming reader and writer for Stata's DTA file format (every released version, 102-119), plus a parser and reader for Stata dictionary (.dct) files."
 license = "MIT"

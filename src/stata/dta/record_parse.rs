@@ -101,7 +101,7 @@ pub(super) fn compute_record_seek_target(
 ) -> Result<RecordSeekTarget> {
     if index > observation_count {
         let message =
-            format!("record index {index} is out of bounds for {observation_count} observations",);
+            format!("record index {index} is out of bounds for {observation_count} observations");
         let error = std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
         return Err(DtaError::io(Section::Records, error));
     }

@@ -239,7 +239,7 @@ Disabled by default. Stata stores dates and timestamps as plain numeric values w
 
 ```toml
 [dependencies]
-dta = { version = "0.5", features = ["chrono"] }
+dta = { version = "0.6", features = ["chrono"] }
 chrono = "0.4"
 ```
 
@@ -290,7 +290,7 @@ Disabled by default. Enable it for async reading and writing with [tokio](https:
 
 ```toml
 [dependencies]
-dta = { version = "0.5", features = ["tokio"] }
+dta = { version = "0.6", features = ["tokio"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"] }
 ```
 

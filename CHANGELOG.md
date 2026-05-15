@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-15
+
 ### Added
 
 - `RecordReader::seek_to_record(index)` jumps to a specific observation by 0-based index in a single seek. Records have a fixed byte width, so the target offset is computed as `data_start + index * row_len` and reached without scanning preceding rows. `index == observation_count` is accepted and leaves the reader in the same exhausted-but-finalized state as full sequential consumption (validating the `</data>` closing tag on XML formats), so `into_long_string_reader()` can be chained immediately afterward. Seeking backward from that state revives the reader. Available wherever `R: Read + Seek`, alongside the existing `seek_records` / `seek_value_labels` / `seek_long_strings` section-level navigation.
